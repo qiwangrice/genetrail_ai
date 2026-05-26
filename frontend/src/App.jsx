@@ -7,6 +7,9 @@ Patients with EGFR activating mutations or ALK fusions are excluded.
 Prior platinum-based chemotherapy is required.
 ECOG performance status must be 0 or 1.`;
 
+const API_BASE = import.meta.env.VITE_API_URL || "";
+const API_URL = `${API_BASE}/api/analyze`;
+
 function formatList(items) {
   if (!items || items.length === 0) {
     return "None";
@@ -43,7 +46,7 @@ export default function App() {
 
     setLoading(true);
     try {
-      const response = await fetch("/api/analyze", {
+      const response = await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ protocol: text }),
