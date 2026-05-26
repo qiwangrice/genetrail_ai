@@ -16,9 +16,20 @@ load_dotenv()
 app = FastAPI(title="GeneTrail AI", version="0.1.0")
 
 frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+extra_origins = [
+    origin.strip()
+    for origin in os.getenv("FRONTEND_ORIGIN_EXTRA", "").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_origin, "http://127.0.0.1:5173"],
+    allow_origins=[
+        frontend_origin,
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        *extra_origins,
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

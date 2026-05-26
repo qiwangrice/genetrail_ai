@@ -7,8 +7,27 @@ Patients with EGFR activating mutations or ALK fusions are excluded.
 Prior platinum-based chemotherapy is required.
 ECOG performance status must be 0 or 1.`;
 
-const API_BASE = import.meta.env.VITE_API_URL || "";
-const API_URL = `${API_BASE}/api/analyze`;
+function apiUrl(path) {
+  const base = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+  return `${base}${path}`;
+}
+
+async function parseJsonResponse(response) {
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await response.text();
+    const preview = text.replace(/\s+/g, " ").slice(0, 120);
+    if (!import.meta.env.VITE_API_URL) {
+      throw new Error(
+        "VITE_API_URL is not set on Vercel. Add your Railway URL and redeploy."
+      );
+    }
+    throw new Error(
+      `API returned non-JSON (${response.status}). Check VITE_API_URL. ${preview}`
+    );
+  }
+  return response.json();
+}
 
 function formatList(items) {
   if (!items || items.length === 0) {
@@ -46,13 +65,13 @@ export default function App() {
 
     setLoading(true);
     try {
-      const response = await fetch(API_URL, {
+      const response = await fetch(apiUrl("/api/analyze"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ protocol: text }),
       });
 
-      const data = await response.json();
+      const data = await parseJsonResponse(response);
       if (!response.ok) {
         throw new Error(data.detail || "Analysis failed.");
       }
