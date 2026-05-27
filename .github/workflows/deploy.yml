@@ -19,8 +19,8 @@ on:
         description: Deploy backend to Railway
         type: boolean
         default: true
-  push:
-    branches: [main]
+  #push:
+  #  branches: [main]
 
 jobs:
   deploy-frontend:

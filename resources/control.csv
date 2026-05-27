@@ -1,0 +1,27 @@
+metric,group,category,count
+patient_count,all,total_nsclc_patients,13005
+patient_count,with_treatment,patients_with_any_treatment,4182
+patient_count,without_treatment,patients_without_treatment,8823
+survival_status,all,Living,5185
+survival_status,all,Unknown,4756
+survival_status,all,Deceased,3064
+survival_status,with_treatment,Living,1645
+survival_status,with_treatment,Deceased,1427
+survival_status,with_treatment,Unknown,1110
+survival_status,without_treatment,Unknown,3646
+survival_status,without_treatment,Living,3540
+survival_status,without_treatment,Deceased,1637
+survival_days,with_treatment,0–1208 days,2352
+survival_days,with_treatment,1208–2416 days,523
+survival_days,with_treatment,2416–3624 days,121
+survival_days,with_treatment,3624–4832 days,38
+survival_days,with_treatment,4832–6039 days,9
+survival_days,with_treatment,6039–7247 days,5
+survival_days,without_treatment,0–1209 days,3628
+survival_days,without_treatment,1209–2418 days,971
+survival_days,without_treatment,2418–3626 days,199
+survival_days,without_treatment,3626–4835 days,48
+survival_days,without_treatment,4835–6044 days,13
+survival_days,without_treatment,6044–7253 days,10
+survival_days,with_treatment,patients_with_os_days,3048
+survival_days,without_treatment,patients_with_os_days,4870

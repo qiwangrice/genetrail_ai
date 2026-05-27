@@ -149,9 +149,36 @@ if __name__ == "__main__":
 
     stats = search_cbioportal_for_patients(result)
     stats_json = json.dumps(stats, indent=2)
-    print("\nNSCLC patient counts from Neon:")
+    print("\nNSCLC patient counts from cBioPortal:")
     print(stats_json)
 
     stats_path = results_dir / f"cbioportal_stats_{datetime.now():%Y%m%d_%H%M%S}.json"
     stats_path.write_text(stats_json + "\n", encoding="utf-8")
     print(f"Saved stats to: {stats_path}")
+
+    treatments = search_neon_for_treatments(result)
+    treatments_json = json.dumps(treatments, indent=2)
+    print("\nTreatments from cBioPortal:")
+    print(treatments_json)
+
+    treatments_path = results_dir / f"treatments_{datetime.now():%Y%m%d_%H%M%S}.json"
+    treatments_path.write_text(treatments_json + "\n", encoding="utf-8")
+    print(f"Saved treatments to: {treatments_path}")
+
+    clinical_trials = search_active_clinical_trials(result)
+    clinical_trials_json = json.dumps(clinical_trials, indent=2)
+    print("\nClinical trials from ClinicalTrials.gov:")
+    print(clinical_trials_json)
+
+    clinical_trials_path = results_dir / f"clinical_trials_{datetime.now():%Y%m%d_%H%M%S}.json"
+    clinical_trials_path.write_text(clinical_trials_json + "\n", encoding="utf-8")
+    print(f"Saved clinical trials to: {clinical_trials_path}")
+
+    drugs = search_oncokb_drugs(result)
+    drugs_json = json.dumps(drugs, indent=2)
+    print("\nDrugs from OncoKB:")
+    print(drugs_json)
+
+    drugs_path = results_dir / f"drugs_{datetime.now():%Y%m%d_%H%M%S}.json"
+    drugs_path.write_text(drugs_json + "\n", encoding="utf-8")
+    print(f"Saved drugs to: {drugs_path}")

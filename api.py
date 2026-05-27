@@ -8,8 +8,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from cbioportal_search import search_cbioportal_for_patients
+from cbioportal_search import search_cbioportal_for_patients, search_neon_for_treatments
+from clinicaltrails_search import search_active_clinical_trials
+from control_stats import load_control_stats
 from main import extract_trial_eligibility
+from oncokb_search import search_oncokb_drugs
 
 load_dotenv()
 
@@ -43,6 +46,10 @@ class AnalyzeRequest(BaseModel):
 class AnalyzeResponse(BaseModel):
     eligibility: dict[str, Any]
     stats: dict[str, Any]
+    treatment_stats: dict[str, Any]
+    control_stats: dict[str, Any]
+    clinical_trials: dict[str, Any]
+    existing_drugs: dict[str, Any]
 
 
 @app.get("/api/health")
@@ -59,6 +66,14 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
     try:
         eligibility = extract_trial_eligibility(protocol)
         stats = search_cbioportal_for_patients(eligibility)
+        treatment_stats = search_neon_for_treatments(eligibility)
+        treatment_stats.pop("patients", None)
+        control_stats = load_control_stats()
+        clinical_trials = search_active_clinical_trials(eligibility, max_results=50)
+        existing_drugs = search_oncokb_drugs(
+            eligibility.required_biomarkers,
+            eligibility.cancer_type,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
@@ -67,4 +82,8 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
     return AnalyzeResponse(
         eligibility=eligibility.model_dump(),
         stats=stats,
+        treatment_stats=treatment_stats,
+        control_stats=control_stats,
+        clinical_trials=clinical_trials,
+        existing_drugs=existing_drugs,
     )
