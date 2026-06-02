@@ -4,10 +4,12 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from cbioportal_search import search_cbioportal_for_patients
+from cbioportal_search import search_cbioportal_for_patients, search_neon_for_treatments
+from clinicaltrails_search import search_active_clinical_trials
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel, Field
+from vicc_search import search_vicc_drugs
 
 load_dotenv()
 
@@ -174,9 +176,12 @@ if __name__ == "__main__":
     clinical_trials_path.write_text(clinical_trials_json + "\n", encoding="utf-8")
     print(f"Saved clinical trials to: {clinical_trials_path}")
 
-    drugs = search_oncokb_drugs(result)
+    drugs = search_vicc_drugs(
+        result.required_biomarkers,
+        result.cancer_type,
+    )
     drugs_json = json.dumps(drugs, indent=2)
-    print("\nDrugs from OncoKB:")
+    print("\nDrugs from VICC Meta-Knowledgebase:")
     print(drugs_json)
 
     drugs_path = results_dir / f"drugs_{datetime.now():%Y%m%d_%H%M%S}.json"

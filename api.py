@@ -12,7 +12,7 @@ from cbioportal_search import search_cbioportal_for_patients, search_neon_for_tr
 from clinicaltrails_search import search_active_clinical_trials
 from control_stats import load_control_stats
 from main import extract_trial_eligibility
-from oncokb_search import search_oncokb_drugs
+from vicc_search import search_vicc_drugs
 
 load_dotenv()
 
@@ -70,7 +70,7 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
         treatment_stats.pop("patients", None)
         control_stats = load_control_stats()
         clinical_trials = search_active_clinical_trials(eligibility, max_results=50)
-        existing_drugs = search_oncokb_drugs(
+        existing_drugs = search_vicc_drugs(
             eligibility.required_biomarkers,
             eligibility.cancer_type,
         )

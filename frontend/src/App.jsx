@@ -198,9 +198,10 @@ function buildDrugEntries(matchedDrugs) {
 
 function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, onDrugToggle }) {
   const drugs = buildDrugEntries(existingDrugs?.matched_drugs);
+  const selectedDrug = drugs.find((drug) => drug.name === activeDrug);
 
   return (
-    <article className="panel panel-wide panel-collapsible">
+    <article className="panel panel-wide panel-collapsible panel-drugs">
       <button
         type="button"
         className="panel-toggle"
@@ -210,7 +211,7 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
         <span className="panel-toggle-text">
           <span className="panel-toggle-title">Existing drugs</span>
           <span className="panel-toggle-meta">
-            {drugs.length.toLocaleString()} drugs from OncoKB
+            {drugs.length.toLocaleString()} drugs from VICC
           </span>
         </span>
         <span className="panel-toggle-icon" aria-hidden="true">
@@ -221,51 +222,60 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
       {expanded ? (
         <div className="drug-list-wrap">
           {drugs.length ? (
-            <ul className="drug-list">
-              {drugs.map((drug) => {
-                const isActive = activeDrug === drug.name;
-                return (
-                  <li key={drug.name} className="drug-item">
+            <>
+              <ul className="drug-list">
+                {drugs.map((drug) => {
+                  const isActive = activeDrug === drug.name;
+                  return (
+                    <li key={drug.name} className="drug-item">
+                      <button
+                        type="button"
+                        className={`drug-chip${isActive ? " drug-chip-active" : ""}`}
+                        onClick={() => onDrugToggle(drug.name)}
+                        aria-expanded={isActive}
+                        aria-controls={isActive ? "drug-detail-panel" : undefined}
+                      >
+                        {drug.name}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              {selectedDrug ? (
+                <div id="drug-detail-panel" className="drug-detail-panel" role="region">
+                  <div className="drug-detail-header">
+                    <h3>{selectedDrug.name}</h3>
                     <button
                       type="button"
-                      className={`drug-chip${isActive ? " drug-chip-active" : ""}`}
-                      onClick={() => onDrugToggle(drug.name)}
-                      aria-expanded={isActive}
-                      aria-describedby={isActive ? `drug-tooltip-${drug.name}` : undefined}
+                      className="drug-detail-close"
+                      onClick={() => onDrugToggle(selectedDrug.name)}
+                      aria-label={`Close ${selectedDrug.name} details`}
                     >
-                      {drug.name}
+                      Close
                     </button>
-                    {isActive ? (
-                      <div
-                        id={`drug-tooltip-${drug.name}`}
-                        className="drug-tooltip"
-                        role="tooltip"
-                      >
-                        {drug.levels.length ? (
-                          <p className="drug-tooltip-meta">
-                            OncoKB level: {drug.levels.join(", ")}
-                          </p>
-                        ) : null}
-                        {drug.descriptions.length ? (
-                          drug.descriptions.map((description) => (
-                            <p key={description.slice(0, 40)} className="drug-tooltip-text">
-                              {description}
-                            </p>
-                          ))
-                        ) : (
-                          <p className="drug-tooltip-text">
-                            No description available for this drug.
-                          </p>
-                        )}
-                      </div>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
+                  </div>
+                  {selectedDrug.levels.length ? (
+                    <p className="drug-detail-meta">
+                      Evidence: {selectedDrug.levels.join(", ")}
+                    </p>
+                  ) : null}
+                  {selectedDrug.descriptions.length ? (
+                    selectedDrug.descriptions.map((description, index) => (
+                      <p key={`${selectedDrug.name}-${index}`} className="drug-detail-text">
+                        {description}
+                      </p>
+                    ))
+                  ) : (
+                    <p className="drug-detail-text">
+                      No description available for this drug.
+                    </p>
+                  )}
+                </div>
+              ) : null}
+            </>
           ) : (
             <p className="chart-empty">
-              No existing drugs matched these biomarkers in OncoKB.
+              No existing drugs matched these biomarkers in VICC.
             </p>
           )}
         </div>
