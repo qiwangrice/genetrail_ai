@@ -158,6 +158,80 @@ function OsDaysHistogram({ distribution }) {
 }
 
 const TRIALS_PER_PAGE = 10;
+const EVIDENCE_RANK = { A: 0, B: 1, C: 2, D: 3 };
+
+function normalizeEvidenceLabel(label) {
+  if (!label) {
+    return null;
+  }
+  const letter = String(label).trim().toUpperCase().charAt(0);
+  return Object.prototype.hasOwnProperty.call(EVIDENCE_RANK, letter) ? letter : null;
+}
+
+function normalizeResponseCategory(responseType) {
+  if (!responseType) {
+    return "unknown";
+  }
+  const value = String(responseType).toLowerCase();
+  if (value.includes("sensitive") || value.includes("responsive")) {
+    return "sensitive";
+  }
+  if (value.includes("resistant") || value.includes("non-response")) {
+    return "resistant";
+  }
+  return "unknown";
+}
+
+function formatResponseLabel(category) {
+  if (category === "sensitive") {
+    return "Sensitive";
+  }
+  if (category === "resistant") {
+    return "Resistant";
+  }
+  return "Unknown";
+}
+
+function deriveChipBadges(associations) {
+  const sensitive = associations.filter(
+    (association) => association.response_category === "sensitive"
+  );
+  const resistant = associations.filter(
+    (association) => association.response_category === "resistant"
+  );
+
+  let primaryResponse = "unknown";
+  let pool = associations;
+  if (sensitive.length) {
+    primaryResponse = "sensitive";
+    pool = sensitive;
+  } else if (resistant.length) {
+    primaryResponse = "resistant";
+    pool = resistant;
+  }
+
+  const bestEvidenceFromPool = (items) => {
+    let best = null;
+    for (const association of items) {
+      const label = association.evidence_label;
+      if (!label) {
+        continue;
+      }
+      if (best === null || EVIDENCE_RANK[label] < EVIDENCE_RANK[best]) {
+        best = label;
+      }
+    }
+    return best;
+  };
+
+  let bestEvidence = bestEvidenceFromPool(pool) || bestEvidenceFromPool(associations);
+
+  return {
+    primaryResponse,
+    bestEvidence,
+    extraAssociationCount: Math.max(0, associations.length - 1),
+  };
+}
 
 function buildDrugEntries(matchedDrugs) {
   const byName = new Map();
@@ -169,31 +243,79 @@ function buildDrugEntries(matchedDrugs) {
         continue;
       }
 
+      const association = {
+        evidence_label: normalizeEvidenceLabel(treatment.evidence_label),
+        evidence_level: treatment.evidence_level ?? null,
+        response_type: treatment.response_type ?? null,
+        response_category: normalizeResponseCategory(treatment.response_type),
+        cancer_type: treatment.cancer_type ?? null,
+        description: treatment.description ?? null,
+        source_link: treatment.source_link ?? null,
+        publication_url: treatment.publication_url ?? null,
+      };
+
       if (!byName.has(name)) {
         byName.set(name, {
           name,
-          ncitCode: drug.ncit_code || null,
-          descriptions: [],
-          levels: new Set(),
+          associations: [],
+          associationKeys: new Set(),
         });
       }
 
       const entry = byName.get(name);
-      if (treatment.description && !entry.descriptions.includes(treatment.description)) {
-        entry.descriptions.push(treatment.description);
+      const dedupeKey = [
+        association.evidence_label,
+        association.response_category,
+        association.cancer_type,
+        association.description,
+      ].join("|");
+      if (entry.associationKeys.has(dedupeKey)) {
+        continue;
       }
-      if (treatment.level) {
-        entry.levels.add(treatment.level);
-      }
+      entry.associationKeys.add(dedupeKey);
+      entry.associations.push(association);
     }
   }
 
   return [...byName.values()]
-    .map((entry) => ({
+    .map(({ associationKeys, ...entry }) => ({
       ...entry,
-      levels: [...entry.levels],
+      ...deriveChipBadges(entry.associations),
     }))
-    .sort((left, right) => left.name.localeCompare(right.name));
+    .sort((left, right) => {
+      const responseOrder = { sensitive: 0, resistant: 1, unknown: 2 };
+      const responseDiff =
+        responseOrder[left.primaryResponse] - responseOrder[right.primaryResponse];
+      if (responseDiff !== 0) {
+        return responseDiff;
+      }
+
+      const leftRank = left.bestEvidence ? EVIDENCE_RANK[left.bestEvidence] : 99;
+      const rightRank = right.bestEvidence ? EVIDENCE_RANK[right.bestEvidence] : 99;
+      if (leftRank !== rightRank) {
+        return leftRank - rightRank;
+      }
+
+      return left.name.localeCompare(right.name);
+    });
+}
+
+function DrugChipBadges({ drug }) {
+  return (
+    <>
+      <span className={`drug-badge drug-badge-response drug-badge-${drug.primaryResponse}`}>
+        {formatResponseLabel(drug.primaryResponse)}
+      </span>
+      {drug.bestEvidence ? (
+        <span className="drug-badge drug-badge-evidence">
+          Evidence {drug.bestEvidence}
+        </span>
+      ) : null}
+      {drug.extraAssociationCount > 0 ? (
+        <span className="drug-badge drug-badge-more">+{drug.extraAssociationCount}</span>
+      ) : null}
+    </>
+  );
 }
 
 function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, onDrugToggle }) {
@@ -235,7 +357,8 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
                         aria-expanded={isActive}
                         aria-controls={isActive ? "drug-detail-panel" : undefined}
                       >
-                        {drug.name}
+                        <span className="drug-chip-name">{drug.name}</span>
+                        <DrugChipBadges drug={drug} />
                       </button>
                     </li>
                   );
@@ -254,16 +377,37 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
                       Close
                     </button>
                   </div>
-                  {selectedDrug.levels.length ? (
+                  {selectedDrug.associations?.length ? (
                     <p className="drug-detail-meta">
-                      Evidence: {selectedDrug.levels.join(", ")}
+                      {selectedDrug.associations.length} association
+                      {selectedDrug.associations.length === 1 ? "" : "s"}
                     </p>
                   ) : null}
-                  {selectedDrug.descriptions.length ? (
-                    selectedDrug.descriptions.map((description, index) => (
-                      <p key={`${selectedDrug.name}-${index}`} className="drug-detail-text">
-                        {description}
-                      </p>
+                  {selectedDrug.associations?.length ? (
+                    selectedDrug.associations.map((association, index) => (
+                      <div
+                        key={`${selectedDrug.name}-${index}`}
+                        className="drug-association-card"
+                      >
+                        <div className="drug-association-badges">
+                          <span
+                            className={`drug-badge drug-badge-response drug-badge-${association.response_category}`}
+                          >
+                            {formatResponseLabel(association.response_category)}
+                          </span>
+                          {association.evidence_label ? (
+                            <span className="drug-badge drug-badge-evidence">
+                              Evidence {association.evidence_label}
+                            </span>
+                          ) : null}
+                        </div>
+                        {association.cancer_type ? (
+                          <p className="drug-association-meta">{association.cancer_type}</p>
+                        ) : null}
+                        {association.description ? (
+                          <p className="drug-detail-text">{association.description}</p>
+                        ) : null}
+                      </div>
                     ))
                   ) : (
                     <p className="drug-detail-text">
