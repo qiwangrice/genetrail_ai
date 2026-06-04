@@ -54,6 +54,24 @@ def _living_percentage(status_rows: Iterable[dict], group_total: int) -> float |
     return round(100 * living / group_total, 1)
 
 
+STATUS_ORDER = ("Living", "Deceased", "Unknown")
+
+
+def _status_distribution(status_rows: Iterable[dict], group_total: int) -> list[dict]:
+    if group_total <= 0:
+        return []
+
+    by_category = {row["category"]: row["count"] for row in status_rows}
+    return [
+        {
+            "status": status,
+            "count": by_category.get(status, 0),
+            "percentage": round(100 * by_category.get(status, 0) / group_total, 1),
+        }
+        for status in STATUS_ORDER
+    ]
+
+
 def load_control_stats(path: Path | None = None) -> dict:
     csv_path = path or DEFAULT_CONTROL_PATH
     if not csv_path.exists():
@@ -94,6 +112,7 @@ def load_control_stats(path: Path | None = None) -> dict:
             "patient_count": group_total,
             "living_percentage": _living_percentage(status_rows, group_total),
             "average_survival_days": _average_survival_days(day_rows),
+            "os_status_distribution": _status_distribution(status_rows, group_total),
             "patients_with_os_days": next(
                 (
                     row["count"]

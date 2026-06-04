@@ -9,8 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from cbioportal_search import search_cbioportal_for_patients, search_neon_for_treatments
-from clinicaltrails_search import search_active_clinical_trials
+from clinicaltrails_search import (
+    search_active_clinical_trials,
+    search_completed_clinical_trials,
+)
 from control_stats import load_control_stats
+from feasibility_summary import feasibility_summary
 from main import extract_trial_eligibility
 from vicc_search import search_vicc_drugs
 
@@ -49,7 +53,9 @@ class AnalyzeResponse(BaseModel):
     treatment_stats: dict[str, Any]
     control_stats: dict[str, Any]
     clinical_trials: dict[str, Any]
+    completed_clinical_trials: dict[str, Any]
     existing_drugs: dict[str, Any]
+    feasibility_summary: dict[str, Any]
 
 
 @app.get("/api/health")
@@ -70,9 +76,22 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
         treatment_stats.pop("patients", None)
         control_stats = load_control_stats()
         clinical_trials = search_active_clinical_trials(eligibility, max_results=50)
+        completed_clinical_trials = search_completed_clinical_trials(
+            eligibility,
+            max_results=50,
+        )
         existing_drugs = search_vicc_drugs(
             eligibility.required_biomarkers,
             eligibility.cancer_type,
+        )
+        summary = feasibility_summary(
+            eligibility,
+            stats,
+            treatment_stats,
+            control_stats,
+            clinical_trials,
+            completed_clinical_trials,
+            existing_drugs,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -85,5 +104,7 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
         treatment_stats=treatment_stats,
         control_stats=control_stats,
         clinical_trials=clinical_trials,
+        completed_clinical_trials=completed_clinical_trials,
         existing_drugs=existing_drugs,
+        feasibility_summary=summary,
     )

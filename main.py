@@ -1,14 +1,20 @@
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
 from cbioportal_search import search_cbioportal_for_patients, search_neon_for_treatments
-from clinicaltrails_search import search_active_clinical_trials
+from clinicaltrails_search import (
+    search_active_clinical_trials,
+    search_completed_clinical_trials,
+)
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel, Field
+from control_stats import load_control_stats
+from feasibility_summary import feasibility_summary
 from vicc_search import search_vicc_drugs
 
 load_dotenv()
@@ -130,6 +136,44 @@ Protocol text:
     return TrialEligibility(**data)
 
 
+def _save_search_result(
+    results_dir: Path,
+    *,
+    prefix: str,
+    label: str,
+    payload: dict,
+    run_timestamp: str,
+) -> None:
+    payload_json = json.dumps(payload, indent=2)
+    print(f"\n{label}:")
+    print(payload_json)
+
+    output_path = results_dir / f"{prefix}_{run_timestamp}.json"
+    output_path.write_text(payload_json + "\n", encoding="utf-8")
+    print(f"Saved {prefix.replace('_', ' ')} to: {output_path}")
+
+
+def _run_search_analyses(result: TrialEligibility) -> dict[str, dict]:
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        stats_future = executor.submit(search_cbioportal_for_patients, result)
+        treatments_future = executor.submit(search_neon_for_treatments, result)
+        clinical_trials_future = executor.submit(search_active_clinical_trials, result)
+        completed_trials_future = executor.submit(search_completed_clinical_trials, result)
+        drugs_future = executor.submit(
+            search_vicc_drugs,
+            result.required_biomarkers,
+            result.cancer_type,
+        )
+
+        return {
+            "stats": stats_future.result(),
+            "treatments": treatments_future.result(),
+            "clinical_trials": clinical_trials_future.result(),
+            "completed_clinical_trials": completed_trials_future.result(),
+            "drugs": drugs_future.result(),
+        }
+
+
 if __name__ == "__main__":
     protocol = """
     Patients must have metastatic non-small cell lung cancer.
@@ -149,41 +193,68 @@ if __name__ == "__main__":
     output_path.write_text(output_json + "\n", encoding="utf-8")
     print(f"\nSaved results to: {output_path}")
 
-    stats = search_cbioportal_for_patients(result)
-    stats_json = json.dumps(stats, indent=2)
-    print("\nNSCLC patient counts from cBioPortal:")
-    print(stats_json)
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    search_results = _run_search_analyses(result)
 
-    stats_path = results_dir / f"cbioportal_stats_{datetime.now():%Y%m%d_%H%M%S}.json"
-    stats_path.write_text(stats_json + "\n", encoding="utf-8")
-    print(f"Saved stats to: {stats_path}")
-
-    treatments = search_neon_for_treatments(result)
-    treatments_json = json.dumps(treatments, indent=2)
-    print("\nTreatments from cBioPortal:")
-    print(treatments_json)
-
-    treatments_path = results_dir / f"treatments_{datetime.now():%Y%m%d_%H%M%S}.json"
-    treatments_path.write_text(treatments_json + "\n", encoding="utf-8")
-    print(f"Saved treatments to: {treatments_path}")
-
-    clinical_trials = search_active_clinical_trials(result)
-    clinical_trials_json = json.dumps(clinical_trials, indent=2)
-    print("\nClinical trials from ClinicalTrials.gov:")
-    print(clinical_trials_json)
-
-    clinical_trials_path = results_dir / f"clinical_trials_{datetime.now():%Y%m%d_%H%M%S}.json"
-    clinical_trials_path.write_text(clinical_trials_json + "\n", encoding="utf-8")
-    print(f"Saved clinical trials to: {clinical_trials_path}")
-
-    drugs = search_vicc_drugs(
-        result.required_biomarkers,
-        result.cancer_type,
+    stats = search_results["stats"]
+    _save_search_result(
+        results_dir,
+        prefix="cbioportal_stats",
+        label="NSCLC patient counts from cBioPortal",
+        payload=stats,
+        run_timestamp=run_timestamp,
     )
-    drugs_json = json.dumps(drugs, indent=2)
-    print("\nDrugs from VICC Meta-Knowledgebase:")
-    print(drugs_json)
 
-    drugs_path = results_dir / f"drugs_{datetime.now():%Y%m%d_%H%M%S}.json"
-    drugs_path.write_text(drugs_json + "\n", encoding="utf-8")
-    print(f"Saved drugs to: {drugs_path}")
+    treatments = search_results["treatments"]
+    _save_search_result(
+        results_dir,
+        prefix="treatments",
+        label="Treatments from cBioPortal",
+        payload=treatments,
+        run_timestamp=run_timestamp,
+    )
+
+    clinical_trials = search_results["clinical_trials"]
+    _save_search_result(
+        results_dir,
+        prefix="clinical_trials",
+        label="Clinical trials from ClinicalTrials.gov",
+        payload=clinical_trials,
+        run_timestamp=run_timestamp,
+    )
+
+    completed_clinical_trials = search_results["completed_clinical_trials"]
+    _save_search_result(
+        results_dir,
+        prefix="completed_clinical_trials",
+        label="Completed clinical trials from ClinicalTrials.gov",
+        payload=completed_clinical_trials,
+        run_timestamp=run_timestamp,
+    )
+
+    drugs = search_results["drugs"]
+    _save_search_result(
+        results_dir,
+        prefix="drugs",
+        label="Drugs from VICC Meta-Knowledgebase",
+        payload=drugs,
+        run_timestamp=run_timestamp,
+    )
+
+    control_stats = load_control_stats()
+    summary = feasibility_summary(
+        result,
+        stats,
+        treatments,
+        control_stats,
+        clinical_trials,
+        completed_clinical_trials,
+        drugs,
+    )
+    summary_json = json.dumps(summary, indent=2)
+    print("\nFeasibility summary:")
+    print(summary_json)
+
+    summary_path = results_dir / f"feasibility_summary_{datetime.now():%Y%m%d_%H%M%S}.json"
+    summary_path.write_text(summary_json + "\n", encoding="utf-8")
+    print(f"Saved feasibility summary to: {summary_path}")

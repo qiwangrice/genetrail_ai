@@ -101,33 +101,96 @@ function OsStatusPieChart({ distribution }) {
   );
 }
 
-function ControlBenchmarkCard({
-  title,
-  patientCount,
-  livingPercentage,
-  averageSurvivalDays,
-}) {
+function ControlBenchmarkStackedChart({ controlStats }) {
+  const groups = [
+    {
+      key: "with_treatment",
+      label: "With prior treatment",
+      data: controlStats?.with_treatment,
+    },
+    {
+      key: "without_treatment",
+      label: "Without prior treatment",
+      data: controlStats?.without_treatment,
+    },
+  ];
+  const statusOrder = ["Living", "Deceased", "Unknown"];
+  const labeledStatuses = new Set(["Living", "Deceased"]);
+  const minSegmentLabelPercent = 10;
+  const hasData = groups.some((group) => group.data?.patient_count > 0);
+
+  if (!hasData) {
+    return <p className="chart-empty">No NSCLC control benchmark data available.</p>;
+  }
+
   return (
-    <div className="control-card">
-      <h4>{title}</h4>
-      <dl className="control-metrics">
-        <div>
-          <dt>Patients</dt>
-          <dd>{patientCount?.toLocaleString?.() ?? "N/A"}</dd>
-        </div>
-        <div>
-          <dt>Living</dt>
-          <dd>{livingPercentage != null ? `${livingPercentage}%` : "N/A"}</dd>
-        </div>
-        <div>
-          <dt>Avg survival days</dt>
-          <dd>
-            {averageSurvivalDays != null
-              ? `${averageSurvivalDays.toLocaleString()} days`
-              : "N/A"}
-          </dd>
-        </div>
-      </dl>
+    <div className="control-benchmark-chart">
+      <ul className="pie-legend control-benchmark-legend">
+        {statusOrder.map((status) => (
+          <li key={status}>
+            <span
+              className="legend-swatch"
+              style={{ background: STATUS_COLORS[status] }}
+            />
+            <span>{status}</span>
+          </li>
+        ))}
+      </ul>
+
+      <div className="stacked-bar-list">
+        {groups.map((group) => {
+          const distribution = group.data?.os_status_distribution || [];
+          const patientCount = group.data?.patient_count ?? 0;
+          const avgDays = group.data?.average_survival_days;
+
+          return (
+            <div key={group.key} className="stacked-bar-row">
+              <div className="stacked-bar-label">{group.label}</div>
+              <div
+                className="stacked-bar-track"
+                role="img"
+                aria-label={`${group.label} survival status distribution`}
+              >
+                {distribution.map((item) => {
+                  const showLabel =
+                    labeledStatuses.has(item.status) &&
+                    item.percentage >= minSegmentLabelPercent;
+
+                  return (
+                    <div
+                      key={item.status}
+                      className={
+                        showLabel
+                          ? "stacked-bar-segment stacked-bar-segment-labeled"
+                          : "stacked-bar-segment"
+                      }
+                      style={{
+                        width: `${item.percentage}%`,
+                        background: STATUS_COLORS[item.status] || "#9a845f",
+                      }}
+                      title={`${item.status}: ${item.count.toLocaleString()} (${item.percentage}%)`}
+                    >
+                      {showLabel ? (
+                        <span className="stacked-bar-segment-label">
+                          {item.percentage}%
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="stacked-bar-meta">
+                n={patientCount.toLocaleString()}
+                {avgDays != null ? ` · avg ${avgDays.toLocaleString()} days` : ""}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="control-benchmark-footnote">
+        Unknown OS status is higher in untreated cohort.
+      </p>
     </div>
   );
 }
@@ -158,6 +221,19 @@ function OsDaysHistogram({ distribution }) {
 }
 
 const TRIALS_PER_PAGE = 10;
+const TRIAL_SUMMARY_COLORS = {
+  total: "#6b8f71",
+  active: "#7d9b6a",
+  completed: "#9a845f",
+};
+
+const TRIAL_OUTCOME_COLORS = {
+  positive: "#7d9b6a",
+  negative: "#b87d5f",
+  failed: "#c45c5c",
+  inconclusive: "#c9bcae",
+  noResults: "#8a9aa8",
+};
 const EVIDENCE_RANK = { A: 0, B: 1, C: 2, D: 3 };
 
 function normalizeEvidenceLabel(label) {
@@ -428,6 +504,117 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
   );
 }
 
+function formatRatingClass(rating) {
+  const value = String(rating || "").toLowerCase();
+  if (value === "strong") return "rating-strong";
+  if (value === "moderate") return "rating-moderate";
+  if (value === "challenging") return "rating-challenging";
+  if (value === "weak") return "rating-weak";
+  return "rating-unknown";
+}
+
+function FeasibilitySummaryPanel({ summary }) {
+  if (!summary) {
+    return null;
+  }
+
+  const endpoints = summary.recommended_endpoints || {};
+  const secondaryEndpoints = endpoints.secondary_endpoints || [];
+  const suggestions = summary.suggestions_to_improve_feasibility || [];
+
+  return (
+    <article className="panel panel-wide feasibility-panel">
+      <h2>Evidence-based feasibility summary</h2>
+      {summary.overall_verdict ? (
+        <p className="feasibility-verdict">{summary.overall_verdict}</p>
+      ) : null}
+
+      {summary.dimensions?.length ? (
+        <>
+          <h3 className="feasibility-subtitle">Feasibility dimensions</h3>
+          <div className="feasibility-table-wrap">
+            <table className="feasibility-table">
+              <thead>
+                <tr>
+                  <th>Dimension</th>
+                  <th>Rating</th>
+                  <th>Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.dimensions.map((row) => (
+                  <tr key={row.dimension}>
+                    <td>{row.dimension}</td>
+                    <td>
+                      <span className={`feasibility-rating ${formatRatingClass(row.rating)}`}>
+                        {row.rating || "Unknown"}
+                      </span>
+                    </td>
+                    <td>{row.why || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : null}
+
+      {endpoints.recommended_phase || endpoints.primary_endpoint ? (
+        <>
+          <h3 className="feasibility-subtitle">Recommended endpoints</h3>
+          <div className="feasibility-table-wrap">
+            <table className="feasibility-table feasibility-table-meta">
+              <tbody>
+                {endpoints.recommended_phase ? (
+                  <tr>
+                    <th scope="row">Recommended phase</th>
+                    <td>{endpoints.recommended_phase}</td>
+                  </tr>
+                ) : null}
+                {endpoints.primary_endpoint ? (
+                  <tr>
+                    <th scope="row">Primary endpoint</th>
+                    <td>{endpoints.primary_endpoint}</td>
+                  </tr>
+                ) : null}
+                {endpoints.primary_rationale ? (
+                  <tr>
+                    <th scope="row">Primary rationale</th>
+                    <td>{endpoints.primary_rationale}</td>
+                  </tr>
+                ) : null}
+                {secondaryEndpoints.length ? (
+                  <tr>
+                    <th scope="row">Secondary endpoints</th>
+                    <td>{secondaryEndpoints.join(", ")}</td>
+                  </tr>
+                ) : null}
+                {endpoints.secondary_rationale ? (
+                  <tr>
+                    <th scope="row">Secondary rationale</th>
+                    <td>{endpoints.secondary_rationale}</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : null}
+
+      {suggestions.length ? (
+        <>
+          <h3 className="feasibility-subtitle">Suggestions to improve feasibility</h3>
+          <ul className="feasibility-suggestions">
+            {suggestions.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </article>
+  );
+}
+
 function formatStatusLabel(status) {
   if (!status) {
     return "Unknown";
@@ -437,6 +624,209 @@ function formatStatusLabel(status) {
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function ClinicalTrialsBarChart({ activeCount, completedCount }) {
+  const totalCount = activeCount + completedCount;
+  const rows = [
+    { label: "Total matched trials", count: totalCount, color: TRIAL_SUMMARY_COLORS.total },
+    { label: "Active trials", count: activeCount, color: TRIAL_SUMMARY_COLORS.active },
+    {
+      label: "Completed / finished trials",
+      count: completedCount,
+      color: TRIAL_SUMMARY_COLORS.completed,
+    },
+  ];
+  const maxCount = Math.max(...rows.map((row) => row.count), 1);
+
+  if (!totalCount) {
+    return <p className="chart-empty">No matched clinical trials found.</p>;
+  }
+
+  return (
+    <div className="histogram">
+      {rows.map((row) => (
+        <div className="histogram-row" key={row.label}>
+          <div className="histogram-label">{row.label}</div>
+          <div className="histogram-bar-wrap">
+            <div
+              className="histogram-bar"
+              style={{
+                width: `${(row.count / maxCount) * 100}%`,
+                background: row.color,
+              }}
+            />
+          </div>
+          <div className="histogram-count">{row.count.toLocaleString()}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CompletedTrialsOutcomePieChart({ outcomeSummary }) {
+  const summary = outcomeSummary || {};
+  const slices = [
+    {
+      key: "positive",
+      label: "Completed positive",
+      count: summary.completed_positive_count || 0,
+      color: TRIAL_OUTCOME_COLORS.positive,
+    },
+    {
+      key: "negative",
+      label: "Completed negative",
+      count: summary.completed_negative_count || 0,
+      color: TRIAL_OUTCOME_COLORS.negative,
+    },
+    {
+      key: "failed",
+      label: "Failed (stopped early)",
+      count: summary.study_stopped_count || 0,
+      color: TRIAL_OUTCOME_COLORS.failed,
+    },
+    {
+      key: "inconclusive",
+      label: "Completed inconclusive",
+      count: summary.completed_inconclusive_count || 0,
+      color: TRIAL_OUTCOME_COLORS.inconclusive,
+    },
+    {
+      key: "noResults",
+      label: "Completed without results",
+      count: summary.completed_no_results_count || 0,
+      color: TRIAL_OUTCOME_COLORS.noResults,
+    },
+  ].filter((slice) => slice.count > 0);
+
+  const total = slices.reduce((sum, slice) => sum + slice.count, 0);
+  if (!total) {
+    return (
+      <p className="chart-empty">No completed clinical trials matched these criteria.</p>
+    );
+  }
+
+  const normalized = slices.map((slice) => ({
+    ...slice,
+    percentage: Math.round((1000 * slice.count) / total) / 10,
+  }));
+
+  let cumulative = 0;
+  const gradientStops = normalized
+    .map((slice) => {
+      const start = cumulative;
+      cumulative += slice.percentage;
+      return `${slice.color} ${start}% ${cumulative}%`;
+    })
+    .join(", ");
+
+  return (
+    <div className="pie-chart-layout">
+      <div
+        className="pie-chart"
+        style={{ background: `conic-gradient(${gradientStops})` }}
+        aria-hidden="true"
+      />
+      <ul className="pie-legend">
+        {normalized.map((slice) => (
+          <li key={slice.key}>
+            <span
+              className="legend-swatch"
+              style={{ background: slice.color }}
+            />
+            <span>
+              {slice.label}: {slice.count.toLocaleString()} ({slice.percentage}%)
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ClinicalTrialSummarySection({
+  clinicalTrials,
+  completedClinicalTrials,
+  expanded,
+  onToggle,
+}) {
+  const activeCount = clinicalTrials?.matched_trial_count ?? 0;
+  const completedCount = completedClinicalTrials?.matched_trial_count ?? 0;
+  const outcomeSummary = completedClinicalTrials?.outcome_summary;
+
+  return (
+    <article className="panel panel-wide panel-collapsible">
+      <button
+        type="button"
+        className="panel-toggle"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <span className="panel-toggle-text">
+          <span className="panel-toggle-title">Clinical trial summary</span>
+          <span className="panel-toggle-meta">
+            {(activeCount + completedCount).toLocaleString()} total matched trials from ClinicalTrials.gov
+          </span>
+        </span>
+        <span className="panel-toggle-icon" aria-hidden="true">
+          {expanded ? "−" : "+"}
+        </span>
+      </button>
+
+      {expanded ? (
+        <div className="clinical-summary-wrap">
+          <div className="charts-grid">
+            <section className="chart-panel">
+              <h3>Matched trials overview</h3>
+              <ClinicalTrialsBarChart
+                activeCount={activeCount}
+                completedCount={completedCount}
+              />
+            </section>
+            <section className="chart-panel">
+              <h3>Completed trial outcomes</h3>
+              <CompletedTrialsOutcomePieChart outcomeSummary={outcomeSummary} />
+            </section>
+          </div>
+          {outcomeSummary ? (
+            <div className="clinical-summary-stats">
+              <StatCard
+                label="Completed with results"
+                value={outcomeSummary.completed_with_results_count}
+                hint="Posted results on ClinicalTrials.gov"
+              />
+              <StatCard
+                label="Primary endpoint met"
+                value={outcomeSummary.completed_positive_count}
+              />
+              <StatCard
+                label="Primary endpoint not met"
+                value={outcomeSummary.completed_negative_count}
+              />
+              <StatCard
+                label="Failed / stopped"
+                value={outcomeSummary.failed_count}
+                hint="Stopped early or negative endpoint"
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function outcomeBadgeClass(category) {
+  if (category === "completed_positive") {
+    return "trial-outcome trial-outcome-positive";
+  }
+  if (category === "completed_negative") {
+    return "trial-outcome trial-outcome-negative";
+  }
+  if (category === "failed") {
+    return "trial-outcome trial-outcome-failed";
+  }
+  return "trial-outcome";
 }
 
 function MatchedClinicalTrialsSection({ clinicalTrials, expanded, onToggle, page, onPageChange }) {
@@ -530,6 +920,111 @@ function MatchedClinicalTrialsSection({ clinicalTrials, expanded, onToggle, page
   );
 }
 
+function CompletedClinicalTrialsSection({
+  completedClinicalTrials,
+  expanded,
+  onToggle,
+  page,
+  onPageChange,
+}) {
+  const trials = completedClinicalTrials?.matched_trials || [];
+  const totalPages = Math.max(1, Math.ceil(trials.length / TRIALS_PER_PAGE));
+  const currentPage = Math.min(page, totalPages - 1);
+  const pageStart = currentPage * TRIALS_PER_PAGE;
+  const pageTrials = trials.slice(pageStart, pageStart + TRIALS_PER_PAGE);
+
+  return (
+    <article className="panel panel-wide panel-collapsible">
+      <button
+        type="button"
+        className="panel-toggle"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <span className="panel-toggle-text">
+          <span className="panel-toggle-title">Completed clinical trials</span>
+          <span className="panel-toggle-meta">
+            {completedClinicalTrials.matched_trial_count?.toLocaleString?.() ?? 0}{" "}
+            finished trials
+          </span>
+        </span>
+        <span className="panel-toggle-icon" aria-hidden="true">
+          {expanded ? "−" : "+"}
+        </span>
+      </button>
+
+      {expanded ? (
+        <div className="trial-list-wrap">
+          {pageTrials.length ? (
+            <ul className="trial-list">
+              {pageTrials.map((trial) => (
+                <li key={trial.nct_id} className="trial-card">
+                  <div className="trial-card-header">
+                    <a
+                      href={trial.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="trial-title-link"
+                    >
+                      {trial.title || trial.nct_id}
+                    </a>
+                    <span className={outcomeBadgeClass(trial.outcome_category)}>
+                      {trial.outcome_label || formatStatusLabel(trial.status)}
+                    </span>
+                  </div>
+                  {trial.outcome_reason ? (
+                    <p className="trial-note">{trial.outcome_reason}</p>
+                  ) : null}
+                  {trial.missing_required_biomarkers?.length ? (
+                    <p className="trial-note trial-note-warning">
+                      Missing required biomarkers:{" "}
+                      {trial.missing_required_biomarkers.join(", ")}
+                    </p>
+                  ) : null}
+                  {trial.conflicting_excluded_biomarkers?.length ? (
+                    <p className="trial-note trial-note-warning">
+                      Conflicting excluded biomarkers:{" "}
+                      {trial.conflicting_excluded_biomarkers.join(", ")}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="chart-empty">
+              No completed clinical trials matched these criteria.
+            </p>
+          )}
+
+          {trials.length > TRIALS_PER_PAGE ? (
+            <div className="trial-pagination">
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => onPageChange(currentPage - 1)}
+                disabled={currentPage === 0}
+              >
+                Previous
+              </button>
+              <span className="trial-pagination-meta">
+                Page {currentPage + 1} of {totalPages}
+              </span>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => onPageChange(currentPage + 1)}
+                disabled={currentPage >= totalPages - 1}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 export default function App() {
   const [protocol, setProtocol] = useState("");
   const [loading, setLoading] = useState(false);
@@ -538,6 +1033,10 @@ export default function App() {
   const [geneCountsExpanded, setGeneCountsExpanded] = useState(false);
   const [clinicalTrialsExpanded, setClinicalTrialsExpanded] = useState(false);
   const [clinicalTrialsPage, setClinicalTrialsPage] = useState(0);
+  const [clinicalTrialSummaryExpanded, setClinicalTrialSummaryExpanded] = useState(true);
+  const [completedClinicalTrialsExpanded, setCompletedClinicalTrialsExpanded] =
+    useState(false);
+  const [completedClinicalTrialsPage, setCompletedClinicalTrialsPage] = useState(0);
   const [existingDrugsExpanded, setExistingDrugsExpanded] = useState(false);
   const [activeDrug, setActiveDrug] = useState("");
 
@@ -548,6 +1047,9 @@ export default function App() {
     setGeneCountsExpanded(false);
     setClinicalTrialsExpanded(false);
     setClinicalTrialsPage(0);
+    setClinicalTrialSummaryExpanded(true);
+    setCompletedClinicalTrialsExpanded(false);
+    setCompletedClinicalTrialsPage(0);
     setExistingDrugsExpanded(false);
     setActiveDrug("");
 
@@ -620,6 +1122,10 @@ export default function App() {
 
         {result ? (
           <section className="results">
+            {result.feasibility_summary ? (
+              <FeasibilitySummaryPanel summary={result.feasibility_summary} />
+            ) : null}
+
             <div className="results-grid">
               <article className="panel">
                 <h2>Extracted eligibility</h2>
@@ -683,7 +1189,7 @@ export default function App() {
                   <span className="panel-toggle-text">
                     <span className="panel-toggle-title">Gene-level patient counts</span>
                     <span className="panel-toggle-meta">
-                      {result.stats.gene_patient_counts.length} genes
+                      {result.stats.gene_patient_counts.length} genes from cBioPortal
                     </span>
                   </span>
                   <span className="panel-toggle-icon" aria-hidden="true">
@@ -715,6 +1221,15 @@ export default function App() {
               </article>
             ) : null}
 
+            {result.clinical_trials || result.completed_clinical_trials ? (
+              <ClinicalTrialSummarySection
+                clinicalTrials={result.clinical_trials}
+                completedClinicalTrials={result.completed_clinical_trials}
+                expanded={clinicalTrialSummaryExpanded}
+                onToggle={() => setClinicalTrialSummaryExpanded((value) => !value)}
+              />
+            ) : null}
+
             {result.clinical_trials ? (
               <MatchedClinicalTrialsSection
                 clinicalTrials={result.clinical_trials}
@@ -722,6 +1237,18 @@ export default function App() {
                 onToggle={() => setClinicalTrialsExpanded((value) => !value)}
                 page={clinicalTrialsPage}
                 onPageChange={setClinicalTrialsPage}
+              />
+            ) : null}
+
+            {result.completed_clinical_trials ? (
+              <CompletedClinicalTrialsSection
+                completedClinicalTrials={result.completed_clinical_trials}
+                expanded={completedClinicalTrialsExpanded}
+                onToggle={() =>
+                  setCompletedClinicalTrialsExpanded((value) => !value)
+                }
+                page={completedClinicalTrialsPage}
+                onPageChange={setCompletedClinicalTrialsPage}
               />
             ) : null}
 
@@ -746,35 +1273,8 @@ export default function App() {
 
                 {result.control_stats ? (
                   <div className="control-benchmark">
-                    <p className="control-benchmark-title">
-                      NSCLC control benchmark
-                    </p>
-                    <div className="control-benchmark-grid">
-                      <ControlBenchmarkCard
-                        title="With treatment"
-                        patientCount={
-                          result.control_stats.with_treatment.patient_count
-                        }
-                        livingPercentage={
-                          result.control_stats.with_treatment.living_percentage
-                        }
-                        averageSurvivalDays={
-                          result.control_stats.with_treatment.average_survival_days
-                        }
-                      />
-                      <ControlBenchmarkCard
-                        title="Without treatment"
-                        patientCount={
-                          result.control_stats.without_treatment.patient_count
-                        }
-                        livingPercentage={
-                          result.control_stats.without_treatment.living_percentage
-                        }
-                        averageSurvivalDays={
-                          result.control_stats.without_treatment.average_survival_days
-                        }
-                      />
-                    </div>
+                    <p className="control-benchmark-title">NSCLC control benchmark</p>
+                    <ControlBenchmarkStackedChart controlStats={result.control_stats} />
                   </div>
                 ) : null}
 

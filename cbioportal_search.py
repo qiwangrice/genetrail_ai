@@ -428,6 +428,7 @@ def search_cbioportal_for_patients(
         | _biomarker_genes(required)
         | _biomarker_genes(excluded)
     )
+    
 
     conn = psycopg2.connect(get_database_url())
     try:
@@ -619,8 +620,8 @@ if __name__ == "__main__":
 
     demo = SimpleNamespace(
         cancer_type="metastatic non-small cell lung cancer",
-        required_biomarkers=["KRAS"],
-        excluded_biomarkers=["EGFR", "ALK"],
+        required_biomarkers=["KRAS G12C mutation"],
+        excluded_biomarkers=["EGFR activating mutations", "ALK fusions"],
         prior_treatments=["platinum-based chemotherapy"],
     )
     print(json.dumps(search_cbioportal_for_patients(demo), indent=2))
