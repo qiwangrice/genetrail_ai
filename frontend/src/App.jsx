@@ -1,5 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
+
+const ANALYSIS_STEPS = [
+  "Extracting eligibility criteria",
+  "Searching NSCLC patient cohort",
+  "Matching treatments and survival",
+  "Searching active and completed trials",
+  "Looking up existing therapies",
+  "Generating feasibility summary",
+];
 
 const EXAMPLE_PROTOCOL = `Patients must have metastatic non-small cell lung cancer.
 Eligible patients must have KRAS G12C mutation confirmed by tumor tissue or ctDNA.
@@ -34,6 +43,59 @@ function formatList(items) {
     return "None";
   }
   return items.join(", ");
+}
+
+function AnalysisProgressPanel({ steps, activeStep }) {
+  const completed = activeStep >= steps.length;
+  const progressPercent = completed
+    ? 100
+    : Math.min(92, Math.round(((activeStep + 1) / steps.length) * 100));
+
+  return (
+    <div
+      className="analysis-progress panel panel-wide"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+    >
+      <div className="analysis-progress-header">
+        <h2 className="analysis-progress-title">Running analysis</h2>
+        <span className="analysis-progress-percent">{progressPercent}%</span>
+      </div>
+
+      <div className="analysis-progress-track" aria-hidden="true">
+        <div
+          className="analysis-progress-fill"
+          style={{ width: `${progressPercent}%` }}
+        />
+      </div>
+
+      <ul className="analysis-progress-steps">
+        {steps.map((label, index) => {
+          const isDone = index < activeStep || completed;
+          const isActive = !completed && index === activeStep;
+
+          return (
+            <li
+              key={label}
+              className={[
+                "analysis-progress-step",
+                isDone ? "is-done" : "",
+                isActive ? "is-active" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
+              <span className="analysis-progress-step-icon" aria-hidden="true">
+                {isDone ? "✓" : isActive ? "…" : ""}
+              </span>
+              <span>{label}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
 }
 
 function StatCard({ label, value, hint }) {
@@ -309,6 +371,26 @@ function deriveChipBadges(associations) {
   };
 }
 
+function pickReferenceUrl(...candidates) {
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    if (Array.isArray(candidate)) {
+      const nested = pickReferenceUrl(...candidate);
+      if (nested) {
+        return nested;
+      }
+      continue;
+    }
+    const text = String(candidate).trim();
+    if (text.toLowerCase().startsWith("http")) {
+      return text;
+    }
+  }
+  return null;
+}
+
 function buildDrugEntries(matchedDrugs) {
   const byName = new Map();
 
@@ -328,22 +410,33 @@ function buildDrugEntries(matchedDrugs) {
         description: treatment.description ?? null,
         source_link: treatment.source_link ?? null,
         publication_url: treatment.publication_url ?? null,
+        url: pickReferenceUrl(drug.url, treatment.url, treatment.source_link, treatment.publication_url),
+        mutation_type_badges: treatment.mutation_type_badges || [],
       };
 
       if (!byName.has(name)) {
         byName.set(name, {
           name,
+          url: association.url,
           associations: [],
           associationKeys: new Set(),
+          mutationTypeBadges: new Set(),
         });
       }
 
       const entry = byName.get(name);
+      if (!entry.url && association.url) {
+        entry.url = association.url;
+      }
+      for (const badge of association.mutation_type_badges) {
+        entry.mutationTypeBadges.add(badge);
+      }
       const dedupeKey = [
         association.evidence_label,
         association.response_category,
         association.cancer_type,
         association.description,
+        (association.mutation_type_badges || []).join(","),
       ].join("|");
       if (entry.associationKeys.has(dedupeKey)) {
         continue;
@@ -354,8 +447,9 @@ function buildDrugEntries(matchedDrugs) {
   }
 
   return [...byName.values()]
-    .map(({ associationKeys, ...entry }) => ({
+    .map(({ associationKeys, mutationTypeBadges, ...entry }) => ({
       ...entry,
+      mutationTypeBadges: [...(mutationTypeBadges || [])].sort(),
       ...deriveChipBadges(entry.associations),
     }))
     .sort((left, right) => {
@@ -376,9 +470,24 @@ function buildDrugEntries(matchedDrugs) {
     });
 }
 
+function DrugChipName({ drug }) {
+  const tooltip = drug.url ? `View VICC evidence: ${drug.url}` : undefined;
+
+  return (
+    <span className="drug-chip-name" title={tooltip}>
+      {drug.name}
+    </span>
+  );
+}
+
 function DrugChipBadges({ drug }) {
   return (
     <>
+      {drug.mutationTypeBadges?.map((badge) => (
+        <span key={badge} className="drug-badge drug-badge-mutation">
+          {badge}
+        </span>
+      ))}
       <span className={`drug-badge drug-badge-response drug-badge-${drug.primaryResponse}`}>
         {formatResponseLabel(drug.primaryResponse)}
       </span>
@@ -426,16 +535,23 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
                   const isActive = activeDrug === drug.name;
                   return (
                     <li key={drug.name} className="drug-item">
-                      <button
-                        type="button"
+                      <div
+                        role="button"
+                        tabIndex={0}
                         className={`drug-chip${isActive ? " drug-chip-active" : ""}`}
                         onClick={() => onDrugToggle(drug.name)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onDrugToggle(drug.name);
+                          }
+                        }}
                         aria-expanded={isActive}
                         aria-controls={isActive ? "drug-detail-panel" : undefined}
                       >
-                        <span className="drug-chip-name">{drug.name}</span>
+                        <DrugChipName drug={drug} />
                         <DrugChipBadges drug={drug} />
-                      </button>
+                      </div>
                     </li>
                   );
                 })}
@@ -443,7 +559,9 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
               {selectedDrug ? (
                 <div id="drug-detail-panel" className="drug-detail-panel" role="region">
                   <div className="drug-detail-header">
-                    <h3>{selectedDrug.name}</h3>
+                    <h3 title={selectedDrug.url ? `View VICC evidence: ${selectedDrug.url}` : undefined}>
+                      {selectedDrug.name}
+                    </h3>
                     <button
                       type="button"
                       className="drug-detail-close"
@@ -466,6 +584,14 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
                         className="drug-association-card"
                       >
                         <div className="drug-association-badges">
+                          {association.mutation_type_badges?.map((badge) => (
+                            <span
+                              key={`${selectedDrug.name}-${index}-${badge}`}
+                              className="drug-badge drug-badge-mutation"
+                            >
+                              {badge}
+                            </span>
+                          ))}
                           <span
                             className={`drug-badge drug-badge-response drug-badge-${association.response_category}`}
                           >
@@ -482,6 +608,18 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
                         ) : null}
                         {association.description ? (
                           <p className="drug-detail-text">{association.description}</p>
+                        ) : null}
+                        {association.url ? (
+                          <p className="drug-detail-links">
+                            <a
+                              href={association.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={association.url}
+                            >
+                              VICC evidence link
+                            </a>
+                          </p>
                         ) : null}
                       </div>
                     ))
@@ -1028,6 +1166,7 @@ function CompletedClinicalTrialsSection({
 export default function App() {
   const [protocol, setProtocol] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState(0);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
   const [geneCountsExpanded, setGeneCountsExpanded] = useState(false);
@@ -1039,6 +1178,21 @@ export default function App() {
   const [completedClinicalTrialsPage, setCompletedClinicalTrialsPage] = useState(0);
   const [existingDrugsExpanded, setExistingDrugsExpanded] = useState(false);
   const [activeDrug, setActiveDrug] = useState("");
+
+  useEffect(() => {
+    if (!loading) {
+      return undefined;
+    }
+
+    setLoadingStep(0);
+    const interval = window.setInterval(() => {
+      setLoadingStep((current) =>
+        current < ANALYSIS_STEPS.length - 1 ? current + 1 : current
+      );
+    }, 2200);
+
+    return () => window.clearInterval(interval);
+  }, [loading]);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -1071,11 +1225,14 @@ export default function App() {
       if (!response.ok) {
         throw new Error(data.detail || "Analysis failed.");
       }
+      setLoadingStep(ANALYSIS_STEPS.length);
       setResult(data);
+      await new Promise((resolve) => window.setTimeout(resolve, 350));
     } catch (err) {
       setError(err.message || "Something went wrong.");
     } finally {
       setLoading(false);
+      setLoadingStep(0);
     }
   }
 
@@ -1101,6 +1258,7 @@ export default function App() {
             value={protocol}
             onChange={(event) => setProtocol(event.target.value)}
             rows={7}
+            disabled={loading}
           />
 
           <div className="actions">
@@ -1117,6 +1275,10 @@ export default function App() {
             </button>
           </div>
         </form>
+
+        {loading ? (
+          <AnalysisProgressPanel steps={ANALYSIS_STEPS} activeStep={loadingStep} />
+        ) : null}
 
         {error ? <div className="error-banner">{error}</div> : null}
 
@@ -1163,7 +1325,7 @@ export default function App() {
                   <StatCard
                     label="NSCLC patients"
                     value={result.stats.unique_patients_with_cancer_type}
-                    hint={`${result.stats.studies_searched} studies in Neon`}
+                    hint={`${result.stats.studies_searched} studies in Database`}
                   />
                   <StatCard
                     label="With required biomarkers"

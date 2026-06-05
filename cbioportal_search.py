@@ -56,59 +56,44 @@ def _biomarker_gene(biomarker: str) -> str:
     return biomarker.strip().upper().split()[0]
 
 
-def _biomarker_genes(biomarkers: Iterable[str]) -> Set[str]:
-    return {_biomarker_gene(biomarker) for biomarker in biomarkers if biomarker}
+def _normalize_biomarker_genes(biomarkers: Iterable[str]) -> List[str]:
+    """Reduce biomarker strings to unique HUGO gene symbols (no variant detail)."""
+    seen: Set[str] = set()
+    normalized: List[str] = []
+    for biomarker in biomarkers:
+        if not biomarker:
+            continue
+        gene = _biomarker_gene(biomarker)
+        if gene in seen:
+            continue
+        seen.add(gene)
+        normalized.append(gene)
+    return normalized
 
 
-def _mutation_matches_biomarker(
-    gene_symbol: str,
-    protein_change: str | None,
-    biomarker: str,
-) -> bool:
-    symbol = gene_symbol.upper()
-    if symbol != _biomarker_gene(biomarker):
-        return False
-    parts = biomarker.upper().split()
-    if len(parts) > 1:
-        variant = parts[1]
-        protein = (protein_change or "").upper()
-        return variant in protein
-    return True
+def _patient_has_gene(mutations: List[dict], gene: str) -> bool:
+    target = gene.upper()
+    return any(mutation["gene_symbol"].upper() == target for mutation in mutations)
 
 
 def _patient_matches_all_biomarkers(
     mutations: List[dict],
     biomarkers: Iterable[str],
 ) -> bool:
-    biomarkers = list(biomarkers)
-    if not biomarkers:
+    genes = _normalize_biomarker_genes(biomarkers)
+    if not genes:
         return True
-    return all(
-        any(
-            _mutation_matches_biomarker(
-                mutation["gene_symbol"],
-                mutation.get("protein_change"),
-                biomarker,
-            )
-            for mutation in mutations
-        )
-        for biomarker in biomarkers
-    )
+    return all(_patient_has_gene(mutations, gene) for gene in genes)
 
 
 def _patient_matches_any_biomarker(
     mutations: List[dict],
     biomarkers: Iterable[str],
 ) -> bool:
-    return any(
-        _mutation_matches_biomarker(
-            mutation["gene_symbol"],
-            mutation.get("protein_change"),
-            biomarker,
-        )
-        for biomarker in biomarkers
-        for mutation in mutations
-    )
+    genes = _normalize_biomarker_genes(biomarkers)
+    if not genes:
+        return False
+    return any(_patient_has_gene(mutations, gene) for gene in genes)
 
 
 def get_database_url() -> str:
@@ -421,14 +406,13 @@ def search_cbioportal_for_patients(
     Expects tables created by load_nsclc_to_neon.py:
       studies, patients, patient_mutations
     """
-    required = result.required_biomarkers or []
-    excluded = result.excluded_biomarkers or []
+    required = _normalize_biomarker_genes(result.required_biomarkers or [])
+    excluded = _normalize_biomarker_genes(result.excluded_biomarkers or [])
     gene_filter = sorted(
         set(genes or DEFAULT_NSCLC_GENES)
-        | _biomarker_genes(required)
-        | _biomarker_genes(excluded)
+        | set(required)
+        | set(excluded)
     )
-    
 
     conn = psycopg2.connect(get_database_url())
     try:
@@ -501,13 +485,13 @@ def search_neon_for_treatments(
     patient_treatments. Expects clinical tables from
     load_nsclc_clinical_to_neon.py: patient_survival, patient_treatments.
     """
-    required = result.required_biomarkers or []
-    excluded = result.excluded_biomarkers or []
+    required = _normalize_biomarker_genes(result.required_biomarkers or [])
+    excluded = _normalize_biomarker_genes(result.excluded_biomarkers or [])
     prior = result.prior_treatments or []
     gene_filter = sorted(
         set(genes or DEFAULT_NSCLC_GENES)
-        | _biomarker_genes(required)
-        | _biomarker_genes(excluded)
+        | set(required)
+        | set(excluded)
     )
 
     conn = psycopg2.connect(get_database_url())

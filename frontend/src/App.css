@@ -97,6 +97,84 @@
   color: var(--accent-dark);
 }
 
+.protocol-input:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.analysis-progress {
+  margin-top: 22px;
+}
+
+.analysis-progress-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.analysis-progress-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.analysis-progress-percent {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.analysis-progress-track {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(154, 132, 95, 0.14);
+  overflow: hidden;
+  margin-bottom: 18px;
+}
+
+.analysis-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #7d9b6a);
+  transition: width 0.45s ease;
+}
+
+.analysis-progress-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.analysis-progress-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.analysis-progress-step.is-active {
+  color: var(--accent-dark);
+  font-weight: 600;
+}
+
+.analysis-progress-step.is-done {
+  color: var(--text);
+}
+
+.analysis-progress-step-icon {
+  width: 1.25rem;
+  flex-shrink: 0;
+  text-align: center;
+  font-weight: 700;
+  color: var(--accent);
+}
+
 .error-banner {
   margin-top: 18px;
   padding: 14px 16px;
@@ -333,6 +411,16 @@
   line-height: 1.3;
 }
 
+.drug-detail-links {
+  margin: 10px 0 0;
+  font-size: 0.9rem;
+}
+
+.drug-detail-links a {
+  color: var(--accent-dark);
+  word-break: break-all;
+}
+
 .drug-badge {
   display: inline-flex;
   align-items: center;
@@ -366,6 +454,12 @@
   background: rgba(154, 132, 95, 0.1);
   color: var(--accent-dark);
   border: 1px solid var(--border);
+}
+
+.drug-badge-mutation {
+  background: rgba(107, 143, 113, 0.18);
+  color: #3d5c44;
+  border: 1px solid rgba(107, 143, 113, 0.35);
 }
 
 .drug-badge-more {
