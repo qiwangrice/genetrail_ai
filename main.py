@@ -5,7 +5,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-from cbioportal_search import search_cbioportal_for_patients, search_neon_for_treatments
+from cbioportal_search import (
+    search_cbioportal_for_patients,
+    search_neon_for_patient_metadata,
+    search_neon_for_treatments,
+)
 from clinicaltrails_search import (
     search_active_clinical_trials,
     search_completed_clinical_trials,
@@ -154,9 +158,10 @@ def _save_search_result(
 
 
 def _run_search_analyses(result: TrialEligibility) -> dict[str, dict]:
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=6) as executor:
         stats_future = executor.submit(search_cbioportal_for_patients, result)
         treatments_future = executor.submit(search_neon_for_treatments, result)
+        metadata_future = executor.submit(search_neon_for_patient_metadata, result)
         clinical_trials_future = executor.submit(search_active_clinical_trials, result)
         completed_trials_future = executor.submit(search_completed_clinical_trials, result)
         drugs_future = executor.submit(
@@ -168,6 +173,7 @@ def _run_search_analyses(result: TrialEligibility) -> dict[str, dict]:
         return {
             "stats": stats_future.result(),
             "treatments": treatments_future.result(),
+            "patient_metadata": metadata_future.result(),
             "clinical_trials": clinical_trials_future.result(),
             "completed_clinical_trials": completed_trials_future.result(),
             "drugs": drugs_future.result(),
@@ -214,6 +220,15 @@ if __name__ == "__main__":
         run_timestamp=run_timestamp,
     )
 
+    patient_metadata = search_results["patient_metadata"]
+    _save_search_result(
+        results_dir,
+        prefix="patient_metadata",
+        label="Patient metadata from cBioPortal",
+        payload=patient_metadata,
+        run_timestamp=run_timestamp,
+    )
+
     clinical_trials = search_results["clinical_trials"]
     _save_search_result(
         results_dir,
@@ -242,6 +257,8 @@ if __name__ == "__main__":
     )
 
     control_stats = load_control_stats()
+    patient_metadata = dict(search_results["patient_metadata"])
+    patient_metadata.pop("patients", None)
     summary = feasibility_summary(
         result,
         stats,
@@ -250,6 +267,7 @@ if __name__ == "__main__":
         clinical_trials,
         completed_clinical_trials,
         drugs,
+        patient_metadata,
     )
     summary_json = json.dumps(summary, indent=2)
     print("\nFeasibility summary:")

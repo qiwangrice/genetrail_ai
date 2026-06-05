@@ -282,6 +282,124 @@ function OsDaysHistogram({ distribution }) {
   );
 }
 
+const METADATA_ATTRIBUTE_TABS = [
+  { key: "sex", label: "Sex", dataKey: "sex_by_os_status", rowLabelKey: "value" },
+  { key: "race", label: "Race", dataKey: "race_by_os_status", rowLabelKey: "value" },
+  {
+    key: "smoking_status",
+    label: "Smoking",
+    dataKey: "smoking_status_by_os_status",
+    rowLabelKey: "value",
+  },
+  { key: "stage", label: "Stage", dataKey: "stage_by_os_status", rowLabelKey: "value" },
+  {
+    key: "ecog_status",
+    label: "ECOG",
+    dataKey: "ecog_status_by_os_status",
+    rowLabelKey: "value",
+  },
+  { key: "age", label: "Age", dataKey: "age_by_os_status", rowLabelKey: "label" },
+];
+
+function PatientAttributesByOsStatusChart({ metadataStats, activeAttr, onAttrChange }) {
+  const activeTab =
+    METADATA_ATTRIBUTE_TABS.find((tab) => tab.key === activeAttr) ||
+    METADATA_ATTRIBUTE_TABS[0];
+  const rows = metadataStats?.[activeTab.dataKey] || [];
+  const statusOrder = ["Living", "Deceased", "Unknown"];
+  const labeledStatuses = new Set(["Living", "Deceased"]);
+  const minSegmentLabelPercent = 10;
+
+  return (
+    <div className="metadata-by-os-chart">
+      <div className="attribute-tab-list" role="tablist" aria-label="Patient attribute">
+        {METADATA_ATTRIBUTE_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            role="tab"
+            aria-selected={activeAttr === tab.key}
+            className={activeAttr === tab.key ? "attribute-tab active" : "attribute-tab"}
+            onClick={() => onAttrChange(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {!rows.length ? (
+        <p className="chart-empty">
+          No {activeTab.label.toLowerCase()} data with survival status available.
+        </p>
+      ) : (
+        <>
+          <ul className="pie-legend control-benchmark-legend">
+            {statusOrder.map((status) => (
+              <li key={status}>
+                <span
+                  className="legend-swatch"
+                  style={{ background: STATUS_COLORS[status] }}
+                />
+                <span>{status}</span>
+              </li>
+            ))}
+          </ul>
+
+          <div className="stacked-bar-list">
+            {rows.map((row) => {
+              const distribution = row.os_status_distribution || [];
+              const rowLabel = row[activeTab.rowLabelKey];
+              const patientCount = row.patient_count ?? 0;
+
+              return (
+                <div key={rowLabel} className="stacked-bar-row">
+                  <div className="stacked-bar-label">{rowLabel}</div>
+                  <div
+                    className="stacked-bar-track"
+                    role="img"
+                    aria-label={`${rowLabel} survival status distribution`}
+                  >
+                    {distribution.map((item) => {
+                      const showLabel =
+                        labeledStatuses.has(item.status) &&
+                        item.percentage >= minSegmentLabelPercent;
+
+                      return (
+                        <div
+                          key={`${rowLabel}-${item.status}`}
+                          className={
+                            showLabel
+                              ? "stacked-bar-segment stacked-bar-segment-labeled"
+                              : "stacked-bar-segment"
+                          }
+                          style={{
+                            width: `${item.percentage}%`,
+                            background: STATUS_COLORS[item.status] || "#9a845f",
+                          }}
+                          title={`${item.status}: ${item.count.toLocaleString()} (${item.percentage}%)`}
+                        >
+                          {showLabel ? (
+                            <span className="stacked-bar-segment-label">
+                              {item.percentage}%
+                            </span>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="stacked-bar-meta">
+                    n={patientCount.toLocaleString()}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 const TRIALS_PER_PAGE = 10;
 const TRIAL_SUMMARY_COLORS = {
   total: "#6b8f71",
@@ -753,6 +871,197 @@ function FeasibilitySummaryPanel({ summary }) {
   );
 }
 
+function buildAnalysisSnapshot(result) {
+  if (!result) {
+    return {};
+  }
+
+  return {
+    cancer_type: result.eligibility?.cancer_type ?? null,
+    required_biomarkers: result.eligibility?.required_biomarkers ?? [],
+    excluded_biomarkers: result.eligibility?.excluded_biomarkers ?? [],
+    prior_treatments: result.eligibility?.prior_treatments ?? [],
+    eligible_patients: result.stats?.eligible_patients ?? null,
+    biomarker_eligible_count: result.treatment_stats?.biomarker_eligible_count ?? null,
+    prior_treatment_matched_count:
+      result.treatment_stats?.prior_treatment_matched_count ?? null,
+    overall_verdict: result.feasibility_summary?.overall_verdict ?? null,
+    matched_trial_count: result.clinical_trials?.matched_trial_count ?? null,
+    matched_drug_count: result.existing_drugs?.matched_drug_count ?? null,
+  };
+}
+
+function FeedbackPanel({ result }) {
+  const [open, setOpen] = useState(false);
+  const [rating, setRating] = useState(0);
+  const [hoverRating, setHoverRating] = useState(0);
+  const [comment, setComment] = useState("");
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState("idle");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [savedAt, setSavedAt] = useState("");
+
+  async function handleFeedbackSubmit(event) {
+    event.preventDefault();
+    if (rating < 1) {
+      setErrorMessage("Please select a star rating.");
+      setStatus("error");
+      return;
+    }
+
+    setStatus("sending");
+    setErrorMessage("");
+
+    try {
+      const response = await fetch(apiUrl("/api/feedback"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rating,
+          comment: comment.trim(),
+          email: email.trim() || null,
+          page_section: "overall",
+          analysis_snapshot: buildAnalysisSnapshot(result),
+        }),
+      });
+      const data = await parseJsonResponse(response);
+      if (!response.ok) {
+        throw new Error(data.detail || "Feedback submission failed.");
+      }
+      setSavedAt(data.created_at || "");
+      setStatus("sent");
+    } catch (err) {
+      setErrorMessage(err.message || "Something went wrong.");
+      setStatus("error");
+    }
+  }
+
+  const displayRating = hoverRating || rating;
+
+  return (
+    <div className="feedback-float">
+      {open ? (
+        <div
+          id="feedback-panel"
+          className="feedback-panel-card"
+          role="dialog"
+          aria-label="Share feedback"
+        >
+          <div className="feedback-panel-header">
+            <h2>Share feedback</h2>
+            <button
+              type="button"
+              className="feedback-close"
+              onClick={() => setOpen(false)}
+              aria-label="Close feedback"
+            >
+              ×
+            </button>
+          </div>
+
+          {status === "sent" ? (
+            <div className="feedback-success">
+              <p>
+                Thank you — your feedback was saved
+                {savedAt ? ` on ${new Date(savedAt).toLocaleString()}` : ""}.
+              </p>
+            </div>
+          ) : (
+            <>
+              <p className="feedback-panel-intro">
+                Help us improve GeneTrail. Your analysis summary is saved with your
+                feedback.
+              </p>
+
+              <form className="feedback-form" onSubmit={handleFeedbackSubmit}>
+                <fieldset className="feedback-fieldset">
+                  <legend className="feedback-label">Rating</legend>
+                  <div
+                    className="star-rating"
+                    role="radiogroup"
+                    aria-label="Rating from 1 to 5 stars"
+                    onMouseLeave={() => setHoverRating(0)}
+                  >
+                    {[1, 2, 3, 4, 5].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={
+                          value <= displayRating
+                            ? "star-button star-button-active"
+                            : "star-button"
+                        }
+                        aria-label={`${value} star${value === 1 ? "" : "s"}`}
+                        aria-pressed={rating === value}
+                        onMouseEnter={() => setHoverRating(value)}
+                        onClick={() => setRating(value)}
+                        disabled={status === "sending"}
+                      >
+                        ★
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <label className="feedback-label" htmlFor="feedback-comment">
+                  Comment
+                </label>
+                <textarea
+                  id="feedback-comment"
+                  className="feedback-textarea"
+                  placeholder="What was helpful? What could be better?"
+                  value={comment}
+                  onChange={(event) => setComment(event.target.value)}
+                  rows={4}
+                  maxLength={2000}
+                  disabled={status === "sending"}
+                />
+
+                <label className="feedback-label" htmlFor="feedback-email">
+                  Email <span className="feedback-optional">(optional)</span>
+                </label>
+                <input
+                  id="feedback-email"
+                  className="feedback-input"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  maxLength={320}
+                  disabled={status === "sending"}
+                />
+
+                {errorMessage ? <div className="feedback-error">{errorMessage}</div> : null}
+
+                <button
+                  type="submit"
+                  className="search-button feedback-submit"
+                  disabled={status === "sending"}
+                >
+                  {status === "sending" ? "Sending..." : "Submit feedback"}
+                </button>
+              </form>
+            </>
+          )}
+        </div>
+      ) : null}
+
+      <button
+        type="button"
+        className="feedback-tab"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-controls="feedback-panel"
+      >
+        <span className="feedback-tab-icon" aria-hidden="true">
+          ★
+        </span>
+        Feedback
+      </button>
+    </div>
+  );
+}
+
 function formatStatusLabel(status) {
   if (!status) {
     return "Unknown";
@@ -1178,6 +1487,7 @@ export default function App() {
   const [completedClinicalTrialsPage, setCompletedClinicalTrialsPage] = useState(0);
   const [existingDrugsExpanded, setExistingDrugsExpanded] = useState(false);
   const [activeDrug, setActiveDrug] = useState("");
+  const [metadataAttribute, setMetadataAttribute] = useState("sex");
 
   useEffect(() => {
     if (!loading) {
@@ -1206,6 +1516,7 @@ export default function App() {
     setCompletedClinicalTrialsPage(0);
     setExistingDrugsExpanded(false);
     setActiveDrug("");
+    setMetadataAttribute("sex");
 
     const text = protocol.trim();
     if (text.length < 10) {
@@ -1456,9 +1767,26 @@ export default function App() {
                 </div>
               </article>
             ) : null}
+
+            {result.patient_metadata_stats ? (
+              <article className="panel panel-wide">
+                <h2>Patient attributes by survival status</h2>
+                <p className="metadata-panel-intro">
+                  Matched cohort demographic and clinical attributes split by overall
+                  survival status.
+                </p>
+                <PatientAttributesByOsStatusChart
+                  metadataStats={result.patient_metadata_stats}
+                  activeAttr={metadataAttribute}
+                  onAttrChange={setMetadataAttribute}
+                />
+              </article>
+            ) : null}
           </section>
         ) : null}
       </main>
+
+      {result ? <FeedbackPanel result={result} /> : null}
     </div>
   );
 }
