@@ -8,6 +8,21 @@ import requests
 
 VICC_API_BASE = "https://search.cancervariants.org/api/v1"
 VICC_ASSOCIATIONS_URL = f"{VICC_API_BASE}/associations"
+CIVICDB_BASE = "https://civicdb.org"
+LEGACY_CIVIC_HOSTS = frozenset(
+    {
+        "civic.genome.wustl.edu",
+        "www.civic.genome.wustl.edu",
+    }
+)
+LEGACY_CIVIC_VARIANT_PATH = re.compile(
+    r"/events/genes/\d+/summary/variants/(\d+)(?:/summary)?/?$",
+    re.IGNORECASE,
+)
+LEGACY_CIVIC_GENE_PATH = re.compile(
+    r"/events/genes/(\d+)/summary/?$",
+    re.IGNORECASE,
+)
 FUSION_GENE_PATTERN = re.compile(
     r"([A-Z0-9]+)\s*(?:-|/|\s+)\s*([A-Z0-9]+)",
     re.IGNORECASE,
@@ -155,21 +170,57 @@ def _build_vicc_query(biomarker: str, cancer_type: str | None) -> str | None:
     return " AND ".join(query_parts)
 
 
+def _rewrite_legacy_civic_url(url: str) -> str:
+    """Map deprecated civic.genome.wustl.edu links to civicdb.org."""
+    text = str(url).strip()
+    if not text.lower().startswith("http"):
+        return text
+
+    host = text.split("://", 1)[-1].split("/", 1)[0].lower()
+    if host not in LEGACY_CIVIC_HOSTS:
+        return text
+
+    path = text.split("://", 1)[-1]
+    path = f"/{path.split('/', 1)[1]}" if "/" in path else "/"
+
+    variant_match = LEGACY_CIVIC_VARIANT_PATH.search(path)
+    if variant_match:
+        return f"{CIVICDB_BASE}/links/variant/{variant_match.group(1)}"
+
+    gene_match = LEGACY_CIVIC_GENE_PATH.search(path)
+    if gene_match:
+        return f"{CIVICDB_BASE}/links/gene/{gene_match.group(1)}"
+
+    return text
+
+
+def _normalize_http_url(url: str | None) -> str | None:
+    if url is None:
+        return None
+    text = str(url).strip()
+    if not text.lower().startswith("http"):
+        return None
+    return _rewrite_legacy_civic_url(text)
+
+
 def _association_reference_url(
     source_link: str | None = None,
     publication_url: str | list | None = None,
 ) -> str | None:
     """Prefer CIVIC/source link; fall back to first publication URL."""
-    if source_link and str(source_link).strip().lower().startswith("http"):
-        return str(source_link).strip()
+    normalized_source = _normalize_http_url(source_link)
+    if normalized_source:
+        return normalized_source
 
     if isinstance(publication_url, list):
         for item in publication_url:
-            text = str(item).strip() if item is not None else ""
-            if text.lower().startswith("http"):
-                return text
-    elif publication_url and str(publication_url).strip().lower().startswith("http"):
-        return str(publication_url).strip()
+            normalized = _normalize_http_url(item)
+            if normalized:
+                return normalized
+    else:
+        normalized = _normalize_http_url(publication_url)
+        if normalized:
+            return normalized
 
     return None
 
@@ -652,7 +703,7 @@ def search_vicc_drugs(
 
 
 DEMO_VICC_EXAMPLE = {
-    "required_biomarkers": ["KRAS G12C"],
+    "required_biomarkers": ["KRAS mutation"],
     "cancer_type": "non-small cell lung cancer",
 }
 
@@ -662,3 +713,4 @@ if __name__ == "__main__":
 
     demo = search_vicc_drugs(**DEMO_VICC_EXAMPLE)
     print(json.dumps(demo, indent=2))
+    print(f"matched_drug_count: {demo['matched_drug_count']}")

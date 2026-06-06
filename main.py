@@ -18,8 +18,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel, Field
 from control_stats import load_control_stats
+from drug_search import search_combined_drugs
 from feasibility_summary import feasibility_summary
-from vicc_search import search_vicc_drugs
 
 load_dotenv()
 
@@ -165,7 +165,7 @@ def _run_search_analyses(result: TrialEligibility) -> dict[str, dict]:
         clinical_trials_future = executor.submit(search_active_clinical_trials, result)
         completed_trials_future = executor.submit(search_completed_clinical_trials, result)
         drugs_future = executor.submit(
-            search_vicc_drugs,
+            search_combined_drugs,
             result.required_biomarkers,
             result.cancer_type,
         )

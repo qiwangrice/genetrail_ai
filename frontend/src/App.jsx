@@ -301,12 +301,55 @@ const METADATA_ATTRIBUTE_TABS = [
   { key: "age", label: "Age", dataKey: "age_by_os_status", rowLabelKey: "label" },
 ];
 
+const OS_STATUS_ORDER = ["Living", "Deceased", "Unknown"];
+const STAGE_ORDER = ["I", "II", "III", "IV", "Other"];
+
+function orderOsStatusDistribution(distribution, patientCount) {
+  const byStatus = new Map((distribution || []).map((item) => [item.status, item]));
+  const total =
+    patientCount ||
+    OS_STATUS_ORDER.reduce((sum, status) => sum + (byStatus.get(status)?.count || 0), 0) ||
+    1;
+
+  return OS_STATUS_ORDER.map((status) => {
+    const item = byStatus.get(status);
+    const count = item?.count ?? 0;
+    return {
+      status,
+      count,
+      percentage: total ? Math.round((1000 * count) / total) / 10 : 0,
+    };
+  }).filter((item) => item.count > 0);
+}
+
+function sortMetadataAttributeRows(rows, activeAttr, rowLabelKey) {
+  if (activeAttr !== "stage") {
+    return rows;
+  }
+
+  const orderIndex = Object.fromEntries(STAGE_ORDER.map((label, index) => [label, index]));
+  return [...rows].sort((left, right) => {
+    const leftLabel = left[rowLabelKey] || "";
+    const rightLabel = right[rowLabelKey] || "";
+    const leftRank = orderIndex[leftLabel] ?? STAGE_ORDER.length;
+    const rightRank = orderIndex[rightLabel] ?? STAGE_ORDER.length;
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+    return leftLabel.localeCompare(rightLabel);
+  });
+}
+
 function PatientAttributesByOsStatusChart({ metadataStats, activeAttr, onAttrChange }) {
   const activeTab =
     METADATA_ATTRIBUTE_TABS.find((tab) => tab.key === activeAttr) ||
     METADATA_ATTRIBUTE_TABS[0];
-  const rows = metadataStats?.[activeTab.dataKey] || [];
-  const statusOrder = ["Living", "Deceased", "Unknown"];
+  const rows = sortMetadataAttributeRows(
+    metadataStats?.[activeTab.dataKey] || [],
+    activeAttr,
+    activeTab.rowLabelKey
+  );
+  const statusOrder = OS_STATUS_ORDER;
   const labeledStatuses = new Set(["Living", "Deceased"]);
   const minSegmentLabelPercent = 10;
 
@@ -347,9 +390,12 @@ function PatientAttributesByOsStatusChart({ metadataStats, activeAttr, onAttrCha
 
           <div className="stacked-bar-list">
             {rows.map((row) => {
-              const distribution = row.os_status_distribution || [];
-              const rowLabel = row[activeTab.rowLabelKey];
               const patientCount = row.patient_count ?? 0;
+              const distribution = orderOsStatusDistribution(
+                row.os_status_distribution,
+                patientCount
+              );
+              const rowLabel = row[activeTab.rowLabelKey];
 
               return (
                 <div key={rowLabel} className="stacked-bar-row">
@@ -589,7 +635,7 @@ function buildDrugEntries(matchedDrugs) {
 }
 
 function DrugChipName({ drug }) {
-  const tooltip = drug.url ? `View VICC evidence: ${drug.url}` : undefined;
+  const tooltip = drug.url ? `View CIViC evidence: ${drug.url}` : undefined;
 
   return (
     <span className="drug-chip-name" title={tooltip}>
@@ -636,7 +682,7 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
         <span className="panel-toggle-text">
           <span className="panel-toggle-title">Existing drugs</span>
           <span className="panel-toggle-meta">
-            {drugs.length.toLocaleString()} drugs from VICC
+            {drugs.length.toLocaleString()} drugs from database
           </span>
         </span>
         <span className="panel-toggle-icon" aria-hidden="true">
@@ -677,7 +723,7 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
               {selectedDrug ? (
                 <div id="drug-detail-panel" className="drug-detail-panel" role="region">
                   <div className="drug-detail-header">
-                    <h3 title={selectedDrug.url ? `View VICC evidence: ${selectedDrug.url}` : undefined}>
+                    <h3 title={selectedDrug.url ? `View CIViC evidence: ${selectedDrug.url}` : undefined}>
                       {selectedDrug.name}
                     </h3>
                     <button
@@ -735,7 +781,7 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
                               rel="noreferrer"
                               title={association.url}
                             >
-                              VICC evidence link
+                              CIViC evidence link
                             </a>
                           </p>
                         ) : null}
@@ -751,7 +797,7 @@ function ExistingDrugsSection({ existingDrugs, expanded, onToggle, activeDrug, o
             </>
           ) : (
             <p className="chart-empty">
-              No existing drugs matched these biomarkers in VICC.
+              No existing drugs matched these biomarkers in drug database.
             </p>
           )}
         </div>
@@ -1643,9 +1689,17 @@ export default function App() {
                     value={result.stats.patients_with_required_biomarkers}
                   />
                   <StatCard
-                    label="Eligible patients"
+                    label="With matched biomarker"
                     value={result.stats.eligible_patients}
-                    hint="Required present, excluded absent"
+                    hint="Required biomarkers present, excluded biomarkers absent"
+                  />
+                  <StatCard
+                    label="Eligible patients"
+                    value={
+                      result.treatment_stats?.prior_treatment_matched_count ??
+                      result.stats.eligible_patients
+                    }
+                    hint="both biomarker and prior treatment matched"
                   />
                 </div>
               </article>

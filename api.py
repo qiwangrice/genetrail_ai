@@ -21,6 +21,7 @@ from control_stats import load_control_stats
 from feasibility_summary import feasibility_summary
 from feedback_store import save_user_feedback
 from main import extract_trial_eligibility
+from drug_search import search_combined_drugs
 from vicc_search import search_vicc_drugs
 
 load_dotenv()
@@ -124,7 +125,7 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
             eligibility,
             max_results=50,
         )
-        existing_drugs = search_vicc_drugs(
+        existing_drugs = search_combined_drugs(
             eligibility.required_biomarkers,
             eligibility.cancer_type,
         )

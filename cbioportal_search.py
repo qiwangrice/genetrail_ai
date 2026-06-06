@@ -390,7 +390,20 @@ def _empty_treatment_search_result(
 
 
 def _summarize_os_status(patients: Iterable[dict]) -> List[dict]:
-    return _summarize_categorical_distribution(patients, "os_status", label_key="status")
+    raw = _summarize_categorical_distribution(patients, "os_status", label_key="status")
+    if not raw:
+        return []
+
+    by_status = {row["status"]: row for row in raw}
+    ordered: List[dict] = []
+    for status in OS_STATUS_ORDER:
+        row = by_status.get(status)
+        if row and row["count"] > 0:
+            ordered.append(row)
+    for row in raw:
+        if row["status"] not in OS_STATUS_ORDER:
+            ordered.append(row)
+    return ordered
 
 
 def _summarize_categorical_distribution(
@@ -434,6 +447,10 @@ RACE_CATEGORY_ORDER = (
 )
 
 SMOKING_CATEGORY_ORDER = ("Yes", "No")
+
+STAGE_CATEGORY_ORDER = ("I", "II", "III", "IV", "Other")
+
+OS_STATUS_ORDER = ("Living", "Deceased", "Unknown")
 
 
 def _normalize_race(value: str | None) -> str | None:
@@ -509,6 +526,26 @@ def _normalize_smoking_status(value: str | None) -> str | None:
     return None
 
 
+def _normalize_stage(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    compact = re.sub(r"[^A-Z0-9]", "", text.upper())
+    compact = compact.removeprefix("STAGE")
+    if compact.startswith("IV"):
+        return "IV"
+    if compact.startswith("III") or "III" in compact:
+        return "III"
+    if compact.startswith("II") or "II" in compact:
+        return "II"
+    if compact.startswith("I") or compact in {"IA", "IB"}:
+        return "I"
+    return "Other"
+
+
 def _apply_metadata_category_normalization(patient: dict) -> dict:
     normalized = dict(patient)
     if normalized.get("race") is not None:
@@ -517,6 +554,8 @@ def _apply_metadata_category_normalization(patient: dict) -> dict:
         normalized["smoking_status"] = _normalize_smoking_status(
             normalized["smoking_status"]
         )
+    if normalized.get("stage") is not None:
+        normalized["stage"] = _normalize_stage(normalized["stage"])
     return normalized
 
 
@@ -669,7 +708,15 @@ def _metadata_by_os_status_summaries(patients: Iterable[dict]) -> dict:
             label_key="value",
             category_order=SMOKING_CATEGORY_ORDER,
         ),
-        "stage_by_os_status": _summarize_attribute_by_os_status(patient_list, "stage"),
+        "stage_by_os_status": _sort_attribute_rows(
+            _summarize_attribute_by_os_status(
+                patient_list,
+                "stage",
+                max_categories=len(STAGE_CATEGORY_ORDER),
+            ),
+            label_key="value",
+            category_order=STAGE_CATEGORY_ORDER,
+        ),
         "ecog_status_by_os_status": _summarize_attribute_by_os_status(
             patient_list, "ecog_status"
         ),
@@ -1160,8 +1207,11 @@ def search_neon_for_patient_metadata(
             ),
             SMOKING_CATEGORY_ORDER,
         ),
-        "stage_distribution": _summarize_categorical_distribution(
-            summary_patients, "stage", include_missing=False
+        "stage_distribution": _sort_distribution_rows(
+            _summarize_categorical_distribution(
+                summary_patients, "stage", include_missing=False
+            ),
+            STAGE_CATEGORY_ORDER,
         ),
         "ecog_status_distribution": _summarize_categorical_distribution(
             summary_patients, "ecog_status", include_missing=False
