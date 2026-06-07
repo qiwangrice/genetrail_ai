@@ -763,6 +763,205 @@
   color: var(--muted);
 }
 
+.panel-gene-pathway {
+  overflow: visible;
+}
+
+.gene-pathway-wrap {
+  padding: 0 22px 22px;
+}
+
+.gene-pathway-intro {
+  margin: 0 0 14px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.gene-pathway-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  margin-bottom: 18px;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.gene-pathway-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gene-pathway-legend-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.gene-pathway-legend-required {
+  background: rgba(47, 111, 78, 0.22);
+  border-color: rgba(47, 111, 78, 0.45);
+}
+
+.gene-pathway-legend-excluded {
+  background: rgba(166, 61, 61, 0.18);
+  border-color: rgba(166, 61, 61, 0.45);
+}
+
+.gene-pathway-tracks {
+  display: grid;
+  gap: 18px;
+}
+
+.gene-pathway-track {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--bg-soft);
+}
+
+.gene-pathway-track-label {
+  margin: 0 0 12px;
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-dark);
+}
+
+.gene-pathway-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 8px;
+}
+
+.gene-pathway-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gene-pathway-step-nodes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.gene-pathway-connector {
+  color: var(--accent);
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.gene-pathway-node-wrap {
+  position: relative;
+}
+
+.gene-pathway-node {
+  min-width: 148px;
+  max-width: 220px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  text-align: left;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.gene-pathway-node:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+}
+
+.gene-pathway-node-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(154, 132, 95, 0.14);
+}
+
+.gene-pathway-node-required {
+  border-color: rgba(47, 111, 78, 0.55);
+  background: rgba(47, 111, 78, 0.08);
+}
+
+.gene-pathway-node-excluded {
+  border-color: rgba(166, 61, 61, 0.55);
+  background: rgba(166, 61, 61, 0.08);
+}
+
+.gene-pathway-node-protein {
+  display: block;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.gene-pathway-node-gene {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.gene-pathway-node-rate {
+  display: block;
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: var(--accent-dark);
+}
+
+.gene-pathway-tooltip {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 10px);
+  left: 0;
+  width: min(280px, 72vw);
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.gene-pathway-tooltip-title {
+  margin: 0 0 10px;
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--accent-dark);
+}
+
+.gene-pathway-tooltip-meta {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.gene-pathway-tooltip-meta div {
+  display: grid;
+  gap: 2px;
+}
+
+.gene-pathway-tooltip-meta dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.gene-pathway-tooltip-meta dd {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+
 
 .charts-grid {
   display: grid;
@@ -1205,5 +1404,14 @@
   .search-form {
     border-radius: 22px;
     padding: 14px;
+  }
+
+  .gene-pathway-node {
+    min-width: 132px;
+  }
+
+  .gene-pathway-tooltip {
+    left: auto;
+    right: 0;
   }
 }

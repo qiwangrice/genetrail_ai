@@ -1,5 +1,101 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
+
+const GENE_PROTEIN_INFO = {
+  EGFR: {
+    protein: "EGFR tyrosine kinase",
+    pathway: "Receptor tyrosine kinase signaling",
+    role: "Cell-surface receptor that activates RAS/MAPK and PI3K pathways.",
+  },
+  ERBB2: {
+    protein: "HER2 tyrosine kinase",
+    pathway: "Receptor tyrosine kinase signaling",
+    role: "ERBB2/HER2 receptor tyrosine kinase; rare but actionable in NSCLC.",
+  },
+  MET: {
+    protein: "MET receptor tyrosine kinase",
+    pathway: "Receptor tyrosine kinase signaling",
+    role: "HGF receptor; exon 14 skipping and amplification drive oncogenic signaling.",
+  },
+  ALK: {
+    protein: "ALK tyrosine kinase",
+    pathway: "Receptor tyrosine kinase signaling",
+    role: "Fusion-driven kinase activated by ALK rearrangements.",
+  },
+  ROS1: {
+    protein: "ROS1 tyrosine kinase",
+    pathway: "Receptor tyrosine kinase signaling",
+    role: "Fusion-driven kinase similar to ALK in NSCLC.",
+  },
+  RET: {
+    protein: "RET receptor tyrosine kinase",
+    pathway: "Receptor tyrosine kinase signaling",
+    role: "Fusion or mutation-driven kinase in a subset of lung cancers.",
+  },
+  KRAS: {
+    protein: "KRAS GTPase",
+    pathway: "RAS-RAF-MEK signaling",
+    role: "Small GTPase relaying growth signals; G12C and other variants are common NSCLC drivers.",
+  },
+  NRAS: {
+    protein: "NRAS GTPase",
+    pathway: "RAS-RAF-MEK signaling",
+    role: "RAS family GTPase in the MAPK cascade.",
+  },
+  BRAF: {
+    protein: "BRAF serine/threonine kinase",
+    pathway: "RAS-RAF-MEK signaling",
+    role: "Downstream RAF kinase in the MAPK pathway.",
+  },
+  MAP2K1: {
+    protein: "MEK1 kinase",
+    pathway: "RAS-RAF-MEK signaling",
+    role: "MEK1 (MAP2K1) kinase transmitting signals to ERK.",
+  },
+  PIK3CA: {
+    protein: "PI3K catalytic subunit alpha",
+    pathway: "PI3K-AKT signaling",
+    role: "Catalytic subunit of class I PI3K promoting cell survival and growth.",
+  },
+  TP53: {
+    protein: "p53 tumor suppressor",
+    pathway: "Cell-cycle and DNA-damage control",
+    role: "Guardian of the genome; loss of p53 function is common in NSCLC.",
+  },
+  STK11: {
+    protein: "LKB1 serine/threonine kinase",
+    pathway: "Tumor suppressor / energy sensing",
+    role: "Also known as LKB1; regulates AMPK and influences immunotherapy response.",
+  },
+  KEAP1: {
+    protein: "KEAP1 adaptor protein",
+    pathway: "Oxidative stress response",
+    role: "Negative regulator of NRF2; mutations can increase oxidative stress tolerance.",
+  },
+};
+
+const MOLECULAR_PATHWAY_TRACKS = [
+  {
+    id: "rtk",
+    label: "Receptor tyrosine kinases",
+    steps: [["EGFR", "ERBB2", "MET", "ALK", "ROS1", "RET"]],
+  },
+  {
+    id: "mapk",
+    label: "RAS-RAF-MEK cascade",
+    steps: [["KRAS", "NRAS"], ["BRAF"], ["MAP2K1"]],
+  },
+  {
+    id: "pi3k",
+    label: "PI3K-AKT signaling",
+    steps: [["PIK3CA"]],
+  },
+  {
+    id: "suppressor",
+    label: "Tumor suppressors",
+    steps: [["TP53", "STK11", "KEAP1"]],
+  },
+];
 
 const ANALYSIS_STEPS = [
   "Extracting eligibility criteria",
@@ -553,6 +649,259 @@ function pickReferenceUrl(...candidates) {
     }
   }
   return null;
+}
+
+function normalizeGeneSymbol(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function geneMatchesBiomarkerList(gene, biomarkers) {
+  const target = normalizeGeneSymbol(gene);
+  return (biomarkers || []).some((item) => {
+    const text = normalizeGeneSymbol(item);
+    return text === target || text.startsWith(`${target} `);
+  });
+}
+
+function getGeneProteinInfo(gene) {
+  const symbol = normalizeGeneSymbol(gene);
+  const known = GENE_PROTEIN_INFO[symbol];
+  if (known) {
+    return { gene: symbol, ...known };
+  }
+  return {
+    gene: symbol,
+    protein: `${symbol} protein`,
+    pathway: "NSCLC genomic landscape",
+    role: "Gene tracked in the NSCLC cohort mutation panel.",
+  };
+}
+
+function buildMolecularPathwayTracks(genePatientCounts) {
+  const availableGenes = new Set(
+    (genePatientCounts || []).map((row) => normalizeGeneSymbol(row.gene))
+  );
+  const geneDataBySymbol = Object.fromEntries(
+    (genePatientCounts || []).map((row) => [normalizeGeneSymbol(row.gene), row])
+  );
+
+  const tracks = MOLECULAR_PATHWAY_TRACKS.map((track) => ({
+    ...track,
+    steps: track.steps
+      .map((step) =>
+        step
+          .filter((gene) => availableGenes.has(normalizeGeneSymbol(gene)))
+          .map((gene) => ({
+            gene: normalizeGeneSymbol(gene),
+            data: geneDataBySymbol[normalizeGeneSymbol(gene)],
+            info: getGeneProteinInfo(gene),
+          }))
+      )
+      .filter((step) => step.length > 0),
+  })).filter((track) => track.steps.length > 0);
+
+  const assignedGenes = new Set(
+    tracks.flatMap((track) => track.steps.flatMap((step) => step.map((node) => node.gene)))
+  );
+  const unassigned = [...availableGenes]
+    .filter((gene) => !assignedGenes.has(gene))
+    .sort()
+    .map((gene) => ({
+      gene,
+      data: geneDataBySymbol[gene],
+      info: getGeneProteinInfo(gene),
+    }));
+
+  if (unassigned.length) {
+    tracks.push({
+      id: "other",
+      label: "Other tracked genes",
+      steps: [unassigned],
+    });
+  }
+
+  return tracks;
+}
+
+function formatMutationRate(row) {
+  const withMutation = row?.patients_with_mutation ?? 0;
+  const withoutMutation = row?.patients_without_mutation ?? 0;
+  const total = withMutation + withoutMutation;
+  if (!total) {
+    return "0%";
+  }
+  return `${((withMutation / total) * 100).toFixed(1)}%`;
+}
+
+function GenePathwayNode({ node, status, isActive, onToggle }) {
+  const { gene, info, data } = node;
+  const mutationRate = formatMutationRate(data);
+
+  return (
+    <div className="gene-pathway-node-wrap">
+      <button
+        type="button"
+        className={[
+          "gene-pathway-node",
+          status ? `gene-pathway-node-${status}` : "",
+          isActive ? "gene-pathway-node-active" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        aria-expanded={isActive}
+        aria-describedby={isActive ? `gene-pathway-tooltip-${gene}` : undefined}
+        onClick={() => onToggle(gene)}
+      >
+        <span className="gene-pathway-node-protein">{info.protein}</span>
+        <span className="gene-pathway-node-gene">{gene}</span>
+        <span className="gene-pathway-node-rate">{mutationRate} mutated</span>
+      </button>
+      {isActive ? (
+        <div
+          id={`gene-pathway-tooltip-${gene}`}
+          className="gene-pathway-tooltip"
+          role="tooltip"
+        >
+          <p className="gene-pathway-tooltip-title">{info.protein}</p>
+          <dl className="gene-pathway-tooltip-meta">
+            <div>
+              <dt>Gene</dt>
+              <dd>{gene}</dd>
+            </div>
+            <div>
+              <dt>Pathway</dt>
+              <dd>{info.pathway}</dd>
+            </div>
+            <div>
+              <dt>Role</dt>
+              <dd>{info.role}</dd>
+            </div>
+            <div>
+              <dt>With mutation</dt>
+              <dd>{(data?.patients_with_mutation ?? 0).toLocaleString()}</dd>
+            </div>
+            <div>
+              <dt>Without mutation</dt>
+              <dd>{(data?.patients_without_mutation ?? 0).toLocaleString()}</dd>
+            </div>
+            <div>
+              <dt>Mutation rate</dt>
+              <dd>{mutationRate}</dd>
+            </div>
+            {status ? (
+              <div>
+                <dt>Protocol status</dt>
+                <dd>{status === "required" ? "Required biomarker" : "Excluded biomarker"}</dd>
+              </div>
+            ) : null}
+          </dl>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function GeneMolecularPathwaySection({
+  genePatientCounts,
+  eligibility,
+  expanded,
+  onToggle,
+}) {
+  const [activeGene, setActiveGene] = useState("");
+  const tracks = useMemo(
+    () => buildMolecularPathwayTracks(genePatientCounts),
+    [genePatientCounts]
+  );
+
+  useEffect(() => {
+    if (!expanded) {
+      setActiveGene("");
+    }
+  }, [expanded]);
+
+  if (!tracks.length) {
+    return null;
+  }
+
+  const geneStatus = (gene) => {
+    if (geneMatchesBiomarkerList(gene, eligibility?.required_biomarkers)) {
+      return "required";
+    }
+    if (geneMatchesBiomarkerList(gene, eligibility?.excluded_biomarkers)) {
+      return "excluded";
+    }
+    return "";
+  };
+
+  return (
+    <article className="panel panel-wide panel-collapsible panel-gene-pathway">
+      <button
+        type="button"
+        className="panel-toggle"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <span className="panel-toggle-text">
+          <span className="panel-toggle-title">Molecular pathway map</span>
+          <span className="panel-toggle-meta">
+            {genePatientCounts.length} genes shown as cell proteins
+          </span>
+        </span>
+        <span className="panel-toggle-icon" aria-hidden="true">
+          {expanded ? "−" : "+"}
+        </span>
+      </button>
+      {expanded ? (
+        <div className="gene-pathway-wrap">
+          <p className="gene-pathway-intro">
+            Each node uses the usual protein label for that gene. Click a node to
+            open gene details, patient counts, and protocol biomarker status.
+          </p>
+          <div className="gene-pathway-legend">
+            <span className="gene-pathway-legend-item">
+              <span className="gene-pathway-legend-swatch gene-pathway-legend-required" />
+              Required biomarker
+            </span>
+            <span className="gene-pathway-legend-item">
+              <span className="gene-pathway-legend-swatch gene-pathway-legend-excluded" />
+              Excluded biomarker
+            </span>
+          </div>
+          <div className="gene-pathway-tracks">
+            {tracks.map((track) => (
+              <section key={track.id} className="gene-pathway-track">
+                <h3 className="gene-pathway-track-label">{track.label}</h3>
+                <div className="gene-pathway-flow">
+                  {track.steps.map((step, stepIndex) => (
+                    <div key={`${track.id}-${stepIndex}`} className="gene-pathway-step">
+                      {stepIndex > 0 ? (
+                        <span className="gene-pathway-connector" aria-hidden="true">
+                          →
+                        </span>
+                      ) : null}
+                      <div className="gene-pathway-step-nodes">
+                        {step.map((node) => (
+                          <GenePathwayNode
+                            key={`${track.id}-${node.gene}`}
+                            node={node}
+                            status={geneStatus(node.gene)}
+                            isActive={activeGene === node.gene}
+                            onToggle={(gene) =>
+                              setActiveGene((current) => (current === gene ? "" : gene))
+                            }
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
 }
 
 function buildDrugEntries(matchedDrugs) {
@@ -1525,6 +1874,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
   const [geneCountsExpanded, setGeneCountsExpanded] = useState(false);
+  const [genePathwayExpanded, setGenePathwayExpanded] = useState(false);
   const [clinicalTrialsExpanded, setClinicalTrialsExpanded] = useState(false);
   const [clinicalTrialsPage, setClinicalTrialsPage] = useState(0);
   const [clinicalTrialSummaryExpanded, setClinicalTrialSummaryExpanded] = useState(true);
@@ -1746,6 +2096,15 @@ export default function App() {
                   </div>
                 ) : null}
               </article>
+            ) : null}
+
+            {result.stats.gene_patient_counts?.length ? (
+              <GeneMolecularPathwaySection
+                genePatientCounts={result.stats.gene_patient_counts}
+                eligibility={result.eligibility}
+                expanded={genePathwayExpanded}
+                onToggle={() => setGenePathwayExpanded((value) => !value)}
+              />
             ) : null}
 
             {result.clinical_trials || result.completed_clinical_trials ? (
