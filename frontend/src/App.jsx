@@ -61,39 +61,103 @@ const GENE_PROTEIN_INFO = {
     protein: "p53 tumor suppressor",
     pathway: "Cell-cycle and DNA-damage control",
     role: "Guardian of the genome; loss of p53 function is common in NSCLC.",
+    regulates: "Brakes proliferation and triggers apoptosis when MAPK/PI3K signaling causes DNA damage.",
+    relatedPathways: ["RAS-RAF-MEK", "PI3K-AKT"],
   },
   STK11: {
     protein: "LKB1 serine/threonine kinase",
     pathway: "Tumor suppressor / energy sensing",
     role: "Also known as LKB1; regulates AMPK and influences immunotherapy response.",
+    regulates: "Metabolic brake on mTOR downstream of PI3K; frequently co-mutated with KRAS.",
+    relatedPathways: ["PI3K-AKT", "RAS-RAF-MEK"],
   },
   KEAP1: {
     protein: "KEAP1 adaptor protein",
     pathway: "Oxidative stress response",
     role: "Negative regulator of NRF2; mutations can increase oxidative stress tolerance.",
+    regulates: "Buffers ROS and stress created by active RTK and RAS signaling.",
+    relatedPathways: ["Receptor tyrosine kinases", "RAS-RAF-MEK"],
   },
 };
 
-const MOLECULAR_PATHWAY_TRACKS = [
-  {
+const MOLECULAR_PATHWAY_LAYOUT = {
+  rtk: {
     id: "rtk",
     label: "Receptor tyrosine kinases",
-    steps: [["EGFR", "ERBB2", "MET", "ALK", "ROS1", "RET"]],
+    summary: "Cell-surface receptors receive growth signals and activate downstream cascades.",
+    genes: ["EGFR", "ERBB2", "MET", "ALK", "ROS1", "RET"],
   },
-  {
+  mapk: {
     id: "mapk",
     label: "RAS-RAF-MEK cascade",
+    summary: "MAPK proliferation pathway: RAS → RAF → MEK → ERK.",
     steps: [["KRAS", "NRAS"], ["BRAF"], ["MAP2K1"]],
+    downstreamLabel: "MEK → ERK → proliferation",
   },
-  {
+  pi3k: {
     id: "pi3k",
     label: "PI3K-AKT signaling",
-    steps: [["PIK3CA"]],
+    summary: "Parallel survival arm activated by the same RTKs.",
+    genes: ["PIK3CA"],
+    downstreamLabel: "PI3K → AKT → mTOR",
   },
-  {
+  suppressor: {
     id: "suppressor",
     label: "Tumor suppressors",
-    steps: [["TP53", "STK11", "KEAP1"]],
+    summary: "Regulatory brakes that limit damage, metabolism, and stress from oncogenic signaling.",
+    genes: ["TP53", "STK11", "KEAP1"],
+  },
+};
+
+const PATHWAY_CONNECTIONS = [
+  {
+    id: "rtk-mapk",
+    from: "rtk",
+    to: "mapk",
+    label: "Activates RAS",
+    detail: "RTK phosphorylation recruits SOS to turn on KRAS/NRAS.",
+  },
+  {
+    id: "rtk-pi3k",
+    from: "rtk",
+    to: "pi3k",
+    label: "Activates PI3K",
+    detail: "RTKs also recruit PI3K to drive AKT/mTOR survival signaling.",
+  },
+  {
+    id: "mapk-outcome",
+    from: "mapk",
+    to: "outcome",
+    label: "Drives proliferation",
+    detail: "ERK transcription program promotes cell division.",
+  },
+  {
+    id: "pi3k-outcome",
+    from: "pi3k",
+    to: "outcome",
+    label: "Promotes survival",
+    detail: "AKT/mTOR supports growth and blocks apoptosis.",
+  },
+];
+
+const SUPPRESSOR_RELATIONSHIPS = [
+  {
+    gene: "TP53",
+    targets: ["mapk", "pi3k"],
+    label: "Brakes MAPK & PI3K output",
+    detail: "p53 responds to replication stress and DNA damage caused by hyperactive growth signaling.",
+  },
+  {
+    gene: "STK11",
+    targets: ["pi3k", "mapk"],
+    label: "Metabolic brake on mTOR / KRAS tumors",
+    detail: "LKB1-AMPK restrains mTOR and is often lost together with KRAS mutations.",
+  },
+  {
+    gene: "KEAP1",
+    targets: ["rtk", "mapk"],
+    label: "Buffers RTK/RAS oxidative stress",
+    detail: "KEAP1 loss activates NRF2, helping cells tolerate ROS from oncogenic signaling.",
   },
 ];
 
@@ -103,6 +167,7 @@ const ANALYSIS_STEPS = [
   "Matching treatments and survival",
   "Searching active and completed trials",
   "Looking up existing therapies",
+  "Searching DepMap cell lines",
   "Generating feasibility summary",
 ];
 
@@ -677,50 +742,153 @@ function getGeneProteinInfo(gene) {
   };
 }
 
-function buildMolecularPathwayTracks(genePatientCounts) {
-  const availableGenes = new Set(
-    (genePatientCounts || []).map((row) => normalizeGeneSymbol(row.gene))
-  );
-  const geneDataBySymbol = Object.fromEntries(
-    (genePatientCounts || []).map((row) => [normalizeGeneSymbol(row.gene), row])
-  );
+function buildGenePathwayData(genePatientCounts, depmap) {
+  const byGene = {};
 
-  const tracks = MOLECULAR_PATHWAY_TRACKS.map((track) => ({
-    ...track,
-    steps: track.steps
-      .map((step) =>
-        step
-          .filter((gene) => availableGenes.has(normalizeGeneSymbol(gene)))
-          .map((gene) => ({
-            gene: normalizeGeneSymbol(gene),
-            data: geneDataBySymbol[normalizeGeneSymbol(gene)],
-            info: getGeneProteinInfo(gene),
-          }))
-      )
-      .filter((step) => step.length > 0),
-  })).filter((track) => track.steps.length > 0);
-
-  const assignedGenes = new Set(
-    tracks.flatMap((track) => track.steps.flatMap((step) => step.map((node) => node.gene)))
-  );
-  const unassigned = [...availableGenes]
-    .filter((gene) => !assignedGenes.has(gene))
-    .sort()
-    .map((gene) => ({
-      gene,
-      data: geneDataBySymbol[gene],
-      info: getGeneProteinInfo(gene),
-    }));
-
-  if (unassigned.length) {
-    tracks.push({
-      id: "other",
-      label: "Other tracked genes",
-      steps: [unassigned],
-    });
+  for (const row of genePatientCounts || []) {
+    const gene = normalizeGeneSymbol(row.gene);
+    byGene[gene] = { ...row, gene };
   }
 
-  return tracks;
+  for (const row of depmap?.gene_effect_summary || []) {
+    const gene = normalizeGeneSymbol(row.gene_symbol);
+    byGene[gene] = {
+      ...(byGene[gene] || { gene }),
+      mean_gene_effect: row.mean_gene_effect,
+      min_gene_effect: row.min_gene_effect,
+      max_gene_effect: row.max_gene_effect,
+      gene_effect_model_count: row.model_count,
+    };
+  }
+
+  for (const row of depmap?.gene_cell_line_counts || []) {
+    const gene = normalizeGeneSymbol(row.gene_symbol);
+    if (!byGene[gene]) {
+      byGene[gene] = { gene };
+    }
+    byGene[gene].cell_lines_with_mutation = row.cell_lines_with_mutation;
+  }
+
+  return Object.values(byGene);
+}
+
+function interpretGeneEffect(meanEffect) {
+  if (meanEffect == null || Number.isNaN(Number(meanEffect))) {
+    return null;
+  }
+  const value = Number(meanEffect);
+  if (value <= -0.5) {
+    return { level: "strong", label: "Strong dependency" };
+  }
+  if (value <= -0.1) {
+    return { level: "moderate", label: "Moderate dependency" };
+  }
+  return { level: "weak", label: "Weak / buffered" };
+}
+
+function formatGeneEffectValue(value) {
+  if (value == null || Number.isNaN(Number(value))) {
+    return null;
+  }
+  const numeric = Number(value);
+  return numeric > 0 ? `+${numeric.toFixed(2)}` : numeric.toFixed(2);
+}
+
+function buildGeneNode(gene, geneDataBySymbol) {
+  const symbol = normalizeGeneSymbol(gene);
+  return {
+    gene: symbol,
+    data: geneDataBySymbol[symbol],
+    info: getGeneProteinInfo(symbol),
+  };
+}
+
+function buildMolecularPathwayLayout(genePatientCounts, depmap) {
+  const geneRows = buildGenePathwayData(genePatientCounts, depmap);
+  const availableGenes = new Set(
+    geneRows.map((row) => normalizeGeneSymbol(row.gene))
+  );
+  const geneDataBySymbol = Object.fromEntries(
+    geneRows.map((row) => [normalizeGeneSymbol(row.gene), row])
+  );
+
+  const rtkNodes = MOLECULAR_PATHWAY_LAYOUT.rtk.genes
+    .filter((gene) => availableGenes.has(normalizeGeneSymbol(gene)))
+    .map((gene) => buildGeneNode(gene, geneDataBySymbol));
+
+  const mapkSteps = MOLECULAR_PATHWAY_LAYOUT.mapk.steps
+    .map((step) =>
+      step
+        .filter((gene) => availableGenes.has(normalizeGeneSymbol(gene)))
+        .map((gene) => buildGeneNode(gene, geneDataBySymbol))
+    )
+    .filter((step) => step.length > 0);
+
+  const pi3kNodes = MOLECULAR_PATHWAY_LAYOUT.pi3k.genes
+    .filter((gene) => availableGenes.has(normalizeGeneSymbol(gene)))
+    .map((gene) => buildGeneNode(gene, geneDataBySymbol));
+
+  const suppressorNodes = MOLECULAR_PATHWAY_LAYOUT.suppressor.genes
+    .filter((gene) => availableGenes.has(normalizeGeneSymbol(gene)))
+    .map((gene) => buildGeneNode(gene, geneDataBySymbol));
+
+  const assignedGenes = new Set([
+    ...rtkNodes.map((node) => node.gene),
+    ...mapkSteps.flatMap((step) => step.map((node) => node.gene)),
+    ...pi3kNodes.map((node) => node.gene),
+    ...suppressorNodes.map((node) => node.gene),
+  ]);
+
+  const otherNodes = [...availableGenes]
+    .filter((gene) => !assignedGenes.has(gene))
+    .sort()
+    .map((gene) => buildGeneNode(gene, geneDataBySymbol));
+
+  const hasSignaling = rtkNodes.length || mapkSteps.length || pi3kNodes.length;
+  if (!hasSignaling && !suppressorNodes.length && !otherNodes.length) {
+    return null;
+  }
+
+  const activeLayerIds = new Set();
+  if (rtkNodes.length) {
+    activeLayerIds.add("rtk");
+  }
+  if (mapkSteps.length) {
+    activeLayerIds.add("mapk");
+  }
+  if (pi3kNodes.length) {
+    activeLayerIds.add("pi3k");
+  }
+  if (rtkNodes.length && (mapkSteps.length || pi3kNodes.length)) {
+    activeLayerIds.add("outcome");
+  }
+
+  const connections = PATHWAY_CONNECTIONS.filter(
+    (connection) =>
+      activeLayerIds.has(connection.from) && activeLayerIds.has(connection.to)
+  );
+
+  const suppressorRelationships = SUPPRESSOR_RELATIONSHIPS.filter((relationship) =>
+    suppressorNodes.some((node) => node.gene === relationship.gene)
+  ).map((relationship) => ({
+    ...relationship,
+    activeTargets: relationship.targets.filter((target) => activeLayerIds.has(target)),
+  }));
+
+  return {
+    rtk: rtkNodes.length ? { ...MOLECULAR_PATHWAY_LAYOUT.rtk, nodes: rtkNodes } : null,
+    mapk: mapkSteps.length ? { ...MOLECULAR_PATHWAY_LAYOUT.mapk, steps: mapkSteps } : null,
+    pi3k: pi3kNodes.length ? { ...MOLECULAR_PATHWAY_LAYOUT.pi3k, nodes: pi3kNodes } : null,
+    suppressor: suppressorNodes.length
+      ? {
+          ...MOLECULAR_PATHWAY_LAYOUT.suppressor,
+          nodes: suppressorNodes,
+          relationships: suppressorRelationships,
+        }
+      : null,
+    other: otherNodes.length ? { label: "Other tracked genes", nodes: otherNodes } : null,
+    connections,
+  };
 }
 
 function formatMutationRate(row) {
@@ -733,9 +901,25 @@ function formatMutationRate(row) {
   return `${((withMutation / total) * 100).toFixed(1)}%`;
 }
 
-function GenePathwayNode({ node, status, isActive, onToggle }) {
+function PathwayConnection({ connection, variant = "activate" }) {
+  return (
+    <div className={`gene-pathway-connection gene-pathway-connection-${variant}`}>
+      <span className="gene-pathway-connection-line" aria-hidden="true" />
+      <div className="gene-pathway-connection-label">
+        <strong>{connection.label}</strong>
+        <span>{connection.detail}</span>
+      </div>
+    </div>
+  );
+}
+
+function GenePathwayNode({ node, status, isActive, onToggle, layerId }) {
   const { gene, info, data } = node;
   const mutationRate = formatMutationRate(data);
+  const geneEffectInterpretation = interpretGeneEffect(data?.mean_gene_effect);
+  const suppressorRelationship = SUPPRESSOR_RELATIONSHIPS.find(
+    (relationship) => relationship.gene === gene
+  );
 
   return (
     <div className="gene-pathway-node-wrap">
@@ -743,6 +927,7 @@ function GenePathwayNode({ node, status, isActive, onToggle }) {
         type="button"
         className={[
           "gene-pathway-node",
+          layerId ? `gene-pathway-node-layer-${layerId}` : "",
           status ? `gene-pathway-node-${status}` : "",
           isActive ? "gene-pathway-node-active" : "",
         ]
@@ -753,7 +938,18 @@ function GenePathwayNode({ node, status, isActive, onToggle }) {
         onClick={() => onToggle(gene)}
       >
         <span className="gene-pathway-node-protein">{info.protein}</span>
-        <span className="gene-pathway-node-gene">{gene}</span>
+        <span className="gene-pathway-node-gene">
+          {gene}
+          {geneEffectInterpretation?.level === "strong" ? (
+            <span
+              className="gene-pathway-dependency-star"
+              title="Strong DepMap dependency (mean gene effect ≤ −0.5)"
+              aria-label="Strong DepMap dependency"
+            >
+              ★
+            </span>
+          ) : null}
+        </span>
         <span className="gene-pathway-node-rate">{mutationRate} mutated</span>
       </button>
       {isActive ? (
@@ -776,6 +972,30 @@ function GenePathwayNode({ node, status, isActive, onToggle }) {
               <dt>Role</dt>
               <dd>{info.role}</dd>
             </div>
+            {info.regulates ? (
+              <div>
+                <dt>Regulates</dt>
+                <dd>{info.regulates}</dd>
+              </div>
+            ) : null}
+            {info.relatedPathways?.length ? (
+              <div>
+                <dt>Related pathways</dt>
+                <dd>{info.relatedPathways.join(", ")}</dd>
+              </div>
+            ) : null}
+            {layerId === "rtk" ? (
+              <div>
+                <dt>Activates</dt>
+                <dd>RAS-RAF-MEK cascade and PI3K-AKT signaling</dd>
+              </div>
+            ) : null}
+            {suppressorRelationship ? (
+              <div>
+                <dt>Pathway relationship</dt>
+                <dd>{suppressorRelationship.detail}</dd>
+              </div>
+            ) : null}
             <div>
               <dt>With mutation</dt>
               <dd>{(data?.patients_with_mutation ?? 0).toLocaleString()}</dd>
@@ -794,6 +1014,37 @@ function GenePathwayNode({ node, status, isActive, onToggle }) {
                 <dd>{status === "required" ? "Required biomarker" : "Excluded biomarker"}</dd>
               </div>
             ) : null}
+            {geneEffectInterpretation ? (
+              <>
+                <div className="gene-pathway-tooltip-divider">DepMap · eligible cell lines</div>
+                <div>
+                  <dt>Mean gene effect</dt>
+                  <dd className="gene-pathway-gene-effect">
+                    <span
+                      className={`gene-effect-value gene-effect-${geneEffectInterpretation.level}`}
+                    >
+                      {formatGeneEffectValue(data.mean_gene_effect)}
+                    </span>
+                    <span
+                      className={`gene-effect-label gene-effect-${geneEffectInterpretation.level}`}
+                    >
+                      {geneEffectInterpretation.label}
+                    </span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Gene effect range</dt>
+                  <dd>
+                    {formatGeneEffectValue(data.min_gene_effect)} to{" "}
+                    {formatGeneEffectValue(data.max_gene_effect)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Cell lines with effect data</dt>
+                  <dd>{(data.gene_effect_model_count ?? 0).toLocaleString()}</dd>
+                </div>
+              </>
+            ) : null}
           </dl>
         </div>
       ) : null}
@@ -801,16 +1052,38 @@ function GenePathwayNode({ node, status, isActive, onToggle }) {
   );
 }
 
+function GenePathwayNodeRow({ nodes, layerId, geneStatus, activeGene, onToggle }) {
+  if (!nodes?.length) {
+    return null;
+  }
+
+  return (
+    <div className="gene-pathway-node-row">
+      {nodes.map((node) => (
+        <GenePathwayNode
+          key={`${layerId}-${node.gene}`}
+          node={node}
+          layerId={layerId}
+          status={geneStatus(node.gene)}
+          isActive={activeGene === node.gene}
+          onToggle={onToggle}
+        />
+      ))}
+    </div>
+  );
+}
+
 function GeneMolecularPathwaySection({
   genePatientCounts,
+  depmap,
   eligibility,
   expanded,
   onToggle,
 }) {
   const [activeGene, setActiveGene] = useState("");
-  const tracks = useMemo(
-    () => buildMolecularPathwayTracks(genePatientCounts),
-    [genePatientCounts]
+  const layout = useMemo(
+    () => buildMolecularPathwayLayout(genePatientCounts, depmap),
+    [genePatientCounts, depmap]
   );
 
   useEffect(() => {
@@ -819,7 +1092,7 @@ function GeneMolecularPathwaySection({
     }
   }, [expanded]);
 
-  if (!tracks.length) {
+  if (!layout) {
     return null;
   }
 
@@ -833,6 +1106,18 @@ function GeneMolecularPathwaySection({
     return "";
   };
 
+  const handleToggle = (gene) =>
+    setActiveGene((current) => (current === gene ? "" : gene));
+
+  const geneCount = buildGenePathwayData(genePatientCounts, depmap).length;
+  const eligibleCellLines = depmap?.eligible_cell_lines;
+
+  const layerLabel = {
+    rtk: "RTK",
+    mapk: "MAPK",
+    pi3k: "PI3K",
+  };
+
   return (
     <article className="panel panel-wide panel-collapsible panel-gene-pathway">
       <button
@@ -844,7 +1129,10 @@ function GeneMolecularPathwaySection({
         <span className="panel-toggle-text">
           <span className="panel-toggle-title">Molecular pathway map</span>
           <span className="panel-toggle-meta">
-            {genePatientCounts.length} genes shown as cell proteins
+            {geneCount} genes
+            {eligibleCellLines != null
+              ? ` · DepMap effects from ${eligibleCellLines.toLocaleString()} eligible cell lines`
+              : " in cBioPortal"}
           </span>
         </span>
         <span className="panel-toggle-icon" aria-hidden="true">
@@ -854,49 +1142,212 @@ function GeneMolecularPathwaySection({
       {expanded ? (
         <div className="gene-pathway-wrap">
           <p className="gene-pathway-intro">
-            Each node uses the usual protein label for that gene. Click a node to
-            open gene details, patient counts, and protocol biomarker status.
+            RTKs activate two parallel arms: RAS-RAF-MEK (proliferation) and
+            PI3K-AKT (survival). Tumor suppressors brake the consequences of
+            hyperactive signaling. Click any node for gene details.
           </p>
           <div className="gene-pathway-legend">
-            <span className="gene-pathway-legend-item">
-              <span className="gene-pathway-legend-swatch gene-pathway-legend-required" />
-              Required biomarker
-            </span>
-            <span className="gene-pathway-legend-item">
-              <span className="gene-pathway-legend-swatch gene-pathway-legend-excluded" />
-              Excluded biomarker
-            </span>
+            <div className="gene-pathway-legend-row">
+              <span className="gene-pathway-legend-item">
+                <span className="gene-pathway-legend-swatch gene-pathway-legend-required" />
+                Required biomarker
+              </span>
+              <span className="gene-pathway-legend-item">
+                <span className="gene-pathway-legend-swatch gene-pathway-legend-excluded" />
+                Excluded biomarker
+              </span>
+              <span className="gene-pathway-legend-item">
+                <span className="gene-pathway-legend-line gene-pathway-legend-line-activate" />
+                Activation
+              </span>
+              <span className="gene-pathway-legend-item">
+                <span className="gene-pathway-legend-line gene-pathway-legend-line-regulate" />
+                Suppressor regulation
+              </span>
+            </div>
+            {depmap?.gene_effect_summary?.length ? (
+              <div className="gene-pathway-legend-row">
+                <span className="gene-pathway-legend-item">
+                  <span
+                    className="gene-pathway-dependency-star gene-pathway-legend-star"
+                    aria-hidden="true"
+                  >
+                    ★
+                  </span>
+                  Strong DepMap dependency
+                </span>
+                <span className="gene-pathway-legend-item">
+                  <span className="gene-pathway-legend-swatch gene-effect-legend-moderate" />
+                  Moderate dependency
+                </span>
+                <span className="gene-pathway-legend-item">
+                  <span className="gene-pathway-legend-swatch gene-effect-legend-weak" />
+                  Weak / buffered
+                </span>
+              </div>
+            ) : null}
           </div>
-          <div className="gene-pathway-tracks">
-            {tracks.map((track) => (
-              <section key={track.id} className="gene-pathway-track">
-                <h3 className="gene-pathway-track-label">{track.label}</h3>
-                <div className="gene-pathway-flow">
-                  {track.steps.map((step, stepIndex) => (
-                    <div key={`${track.id}-${stepIndex}`} className="gene-pathway-step">
-                      {stepIndex > 0 ? (
-                        <span className="gene-pathway-connector" aria-hidden="true">
+
+          <div className="gene-pathway-diagram">
+            {layout.rtk ? (
+              <section className="gene-pathway-layer gene-pathway-layer-rtk">
+                <header className="gene-pathway-layer-header">
+                  <h3>{layout.rtk.label}</h3>
+                  <p>{layout.rtk.summary}</p>
+                </header>
+                <GenePathwayNodeRow
+                  nodes={layout.rtk.nodes}
+                  layerId="rtk"
+                  geneStatus={geneStatus}
+                  activeGene={activeGene}
+                  onToggle={handleToggle}
+                />
+              </section>
+            ) : null}
+
+            {layout.connections.some((connection) => connection.from === "rtk") ? (
+              <div className="gene-pathway-branch-grid">
+                {layout.connections
+                  .filter((connection) => connection.from === "rtk")
+                  .map((connection) => (
+                    <PathwayConnection
+                      key={connection.id}
+                      connection={connection}
+                      variant={connection.to === "pi3k" ? "branch" : "activate"}
+                    />
+                  ))}
+              </div>
+            ) : null}
+
+            <div className="gene-pathway-signaling-split">
+              {layout.mapk ? (
+                <section className="gene-pathway-layer gene-pathway-layer-mapk">
+                  <header className="gene-pathway-layer-header">
+                    <h3>{layout.mapk.label}</h3>
+                    <p>{layout.mapk.summary}</p>
+                  </header>
+                  <div className="gene-pathway-flow">
+                    {layout.mapk.steps.map((step, stepIndex) => (
+                      <div key={`mapk-${stepIndex}`} className="gene-pathway-step">
+                        {stepIndex > 0 ? (
+                          <span className="gene-pathway-connector" aria-hidden="true">
+                            →
+                          </span>
+                        ) : null}
+                        <GenePathwayNodeRow
+                          nodes={step}
+                          layerId="mapk"
+                          geneStatus={geneStatus}
+                          activeGene={activeGene}
+                          onToggle={handleToggle}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {layout.mapk.downstreamLabel ? (
+                    <p className="gene-pathway-downstream">{layout.mapk.downstreamLabel}</p>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {layout.pi3k ? (
+                <section className="gene-pathway-layer gene-pathway-layer-pi3k">
+                  <header className="gene-pathway-layer-header">
+                    <h3>{layout.pi3k.label}</h3>
+                    <p>{layout.pi3k.summary}</p>
+                  </header>
+                  <GenePathwayNodeRow
+                    nodes={layout.pi3k.nodes}
+                    layerId="pi3k"
+                    geneStatus={geneStatus}
+                    activeGene={activeGene}
+                    onToggle={handleToggle}
+                  />
+                  {layout.pi3k.downstreamLabel ? (
+                    <p className="gene-pathway-downstream">{layout.pi3k.downstreamLabel}</p>
+                  ) : null}
+                </section>
+              ) : null}
+            </div>
+
+            {layout.connections.some((connection) => connection.to === "outcome") ? (
+              <section className="gene-pathway-outcome">
+                <h3 className="gene-pathway-outcome-title">Shared tumor growth output</h3>
+                <div className="gene-pathway-outcome-links">
+                  {layout.connections
+                    .filter((connection) => connection.to === "outcome")
+                    .map((connection) => (
+                      <div key={connection.id} className="gene-pathway-outcome-item">
+                        <span className="gene-pathway-outcome-from">
+                          {connection.from === "mapk" ? "MAPK arm" : "PI3K arm"}
+                        </span>
+                        <span className="gene-pathway-outcome-arrow" aria-hidden="true">
                           →
                         </span>
-                      ) : null}
-                      <div className="gene-pathway-step-nodes">
-                        {step.map((node) => (
-                          <GenePathwayNode
-                            key={`${track.id}-${node.gene}`}
-                            node={node}
-                            status={geneStatus(node.gene)}
-                            isActive={activeGene === node.gene}
-                            onToggle={(gene) =>
-                              setActiveGene((current) => (current === gene ? "" : gene))
-                            }
-                          />
-                        ))}
+                        <span>{connection.label}</span>
                       </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               </section>
-            ))}
+            ) : null}
+
+            {layout.suppressor ? (
+              <section className="gene-pathway-layer gene-pathway-layer-suppressor">
+                <header className="gene-pathway-layer-header">
+                  <h3>{layout.suppressor.label}</h3>
+                  <p>{layout.suppressor.summary}</p>
+                </header>
+                <div className="gene-pathway-suppressor-grid">
+                  {layout.suppressor.nodes.map((node) => {
+                    const relationship = layout.suppressor.relationships.find(
+                      (item) => item.gene === node.gene
+                    );
+                    return (
+                      <div key={node.gene} className="gene-pathway-suppressor-card">
+                        <GenePathwayNode
+                          node={node}
+                          layerId="suppressor"
+                          status={geneStatus(node.gene)}
+                          isActive={activeGene === node.gene}
+                          onToggle={handleToggle}
+                        />
+                        {relationship ? (
+                          <div className="gene-pathway-regulation">
+                            <p className="gene-pathway-regulation-label">{relationship.label}</p>
+                            <div className="gene-pathway-regulation-targets">
+                              {relationship.activeTargets.map((target) => (
+                                <span
+                                  key={`${node.gene}-${target}`}
+                                  className="gene-pathway-regulation-target"
+                                >
+                                  regulates {layerLabel[target] || target}
+                                </span>
+                              ))}
+                            </div>
+                            <p className="gene-pathway-regulation-detail">{relationship.detail}</p>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : null}
+
+            {layout.other ? (
+              <section className="gene-pathway-layer gene-pathway-layer-other">
+                <header className="gene-pathway-layer-header">
+                  <h3>{layout.other.label}</h3>
+                </header>
+                <GenePathwayNodeRow
+                  nodes={layout.other.nodes}
+                  layerId="other"
+                  geneStatus={geneStatus}
+                  activeGene={activeGene}
+                  onToggle={handleToggle}
+                />
+              </section>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -1013,6 +1464,125 @@ function DrugChipBadges({ drug }) {
         <span className="drug-badge drug-badge-more">+{drug.extraAssociationCount}</span>
       ) : null}
     </>
+  );
+}
+
+const PRISM_SCREEN_COLORS = {
+  primary: "#6f8f72",
+  secondary: "#8a7d9b",
+};
+
+function DepMapPrismSensitivityChart({ drugSummary }) {
+  const rows = [...(drugSummary || [])].sort(
+    (left, right) => left.mean_log_fold_change - right.mean_log_fold_change
+  );
+
+  if (!rows.length) {
+    return (
+      <p className="chart-empty">
+        No PRISM sensitivity data for eligible DepMap cell lines.
+      </p>
+    );
+  }
+
+  const maxMagnitude = Math.max(
+    ...rows.map((row) => Math.abs(Number(row.mean_log_fold_change) || 0)),
+    0.01
+  );
+
+  return (
+    <div className="prism-sensitivity-chart">
+      {rows.map((row) => {
+        const lfc = Number(row.mean_log_fold_change) || 0;
+        const label = row.drug_name || row.broad_id || "Unknown compound";
+        const screenType = row.screen_type || "unknown";
+        return (
+          <div
+            className="prism-sensitivity-row"
+            key={`${screenType}-${row.broad_id || label}-${lfc}`}
+          >
+            <div className="prism-sensitivity-label">
+              <span className="prism-drug-name" title={label}>
+                {label}
+              </span>
+              <span className={`prism-screen-badge prism-screen-badge-${screenType}`}>
+                {screenType}
+              </span>
+            </div>
+            <div className="histogram-bar-wrap">
+              <div
+                className="histogram-bar"
+                style={{
+                  width: `${(Math.abs(lfc) / maxMagnitude) * 100}%`,
+                  background:
+                    PRISM_SCREEN_COLORS[screenType] || "var(--accent)",
+                }}
+              />
+            </div>
+            <div className="histogram-count" title="Mean log-fold change">
+              {lfc.toFixed(2)}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DepMapPrismSensitivitySection({ depmap, expanded, onToggle }) {
+  const drugSummary = depmap?.drug_sensitivity_summary || [];
+  const eligibleCount = depmap?.eligible_cell_lines ?? 0;
+
+  if (!depmap) {
+    return null;
+  }
+
+  return (
+    <article className="panel panel-wide panel-collapsible">
+      <button
+        type="button"
+        className="panel-toggle"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <span className="panel-toggle-text">
+          <span className="panel-toggle-title">DepMap PRISM drug sensitivity</span>
+          <span className="panel-toggle-meta">
+            {drugSummary.length.toLocaleString()} compounds across{" "}
+            {eligibleCount.toLocaleString()} eligible cell lines
+          </span>
+        </span>
+        <span className="panel-toggle-icon" aria-hidden="true">
+          {expanded ? "−" : "+"}
+        </span>
+      </button>
+
+      {expanded ? (
+        <div className="depmap-prism-wrap">
+          <p className="depmap-prism-intro">
+            Mean PRISM log-fold change across {eligibleCount.toLocaleString()} eligible
+            lung cell lines. More negative values indicate stronger growth inhibition.
+          </p>
+          <DepMapPrismSensitivityChart drugSummary={drugSummary} />
+          <div className="prism-sensitivity-legend">
+            <span className="prism-sensitivity-legend-item">
+              <span
+                className="prism-sensitivity-legend-swatch"
+                style={{ background: PRISM_SCREEN_COLORS.primary }}
+              />
+              Primary screen
+            </span>
+            <span className="prism-sensitivity-legend-item">
+              <span
+                className="prism-sensitivity-legend-swatch"
+                style={{ background: PRISM_SCREEN_COLORS.secondary }}
+              />
+              Secondary screen
+            </span>
+          </div>
+        </div>
+      ) : null}
+    </article>
   );
 }
 
@@ -1283,6 +1853,7 @@ function buildAnalysisSnapshot(result) {
     overall_verdict: result.feasibility_summary?.overall_verdict ?? null,
     matched_trial_count: result.clinical_trials?.matched_trial_count ?? null,
     matched_drug_count: result.existing_drugs?.matched_drug_count ?? null,
+    eligible_cell_lines: result.depmap?.eligible_cell_lines ?? null,
   };
 }
 
@@ -1873,7 +2444,6 @@ export default function App() {
   const [loadingStep, setLoadingStep] = useState(0);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
-  const [geneCountsExpanded, setGeneCountsExpanded] = useState(false);
   const [genePathwayExpanded, setGenePathwayExpanded] = useState(false);
   const [clinicalTrialsExpanded, setClinicalTrialsExpanded] = useState(false);
   const [clinicalTrialsPage, setClinicalTrialsPage] = useState(0);
@@ -1882,6 +2452,7 @@ export default function App() {
     useState(false);
   const [completedClinicalTrialsPage, setCompletedClinicalTrialsPage] = useState(0);
   const [existingDrugsExpanded, setExistingDrugsExpanded] = useState(false);
+  const [depmapPrismExpanded, setDepmapPrismExpanded] = useState(false);
   const [activeDrug, setActiveDrug] = useState("");
   const [metadataAttribute, setMetadataAttribute] = useState("sex");
 
@@ -1904,13 +2475,14 @@ export default function App() {
     event.preventDefault();
     setError("");
     setResult(null);
-    setGeneCountsExpanded(false);
+    setGenePathwayExpanded(false);
     setClinicalTrialsExpanded(false);
     setClinicalTrialsPage(0);
     setClinicalTrialSummaryExpanded(true);
     setCompletedClinicalTrialsExpanded(false);
     setCompletedClinicalTrialsPage(0);
     setExistingDrugsExpanded(false);
+    setDepmapPrismExpanded(false);
     setActiveDrug("");
     setMetadataAttribute("sex");
 
@@ -2041,7 +2613,7 @@ export default function App() {
                   <StatCard
                     label="With matched biomarker"
                     value={result.stats.eligible_patients}
-                    hint="Required biomarkers present, excluded biomarkers absent"
+                    hint="excluded biomarkers absent"
                   />
                   <StatCard
                     label="Eligible patients"
@@ -2053,54 +2625,34 @@ export default function App() {
                   />
                 </div>
               </article>
+
+              {result.depmap ? (
+                <article className="panel">
+                  <h2>Cell line match summary</h2>
+                  <div className="stats-grid">
+                    <StatCard
+                      label="Lung cell lines"
+                      value={result.depmap.total_cell_lines}
+                      hint="NSCLC subset in DepMap"
+                    />
+                    <StatCard
+                      label="With required biomarkers"
+                      value={result.depmap.cell_lines_with_required_biomarkers}
+                    />
+                    <StatCard
+                      label="Eligible cell lines"
+                      value={result.depmap.eligible_cell_lines}
+                      hint="excluded biomarkers absent"
+                    />
+                  </div>
+                </article>
+              ) : null}
             </div>
 
-            {result.stats.gene_patient_counts?.length ? (
-              <article className="panel panel-wide panel-collapsible">
-                <button
-                  type="button"
-                  className="panel-toggle"
-                  onClick={() => setGeneCountsExpanded((expanded) => !expanded)}
-                  aria-expanded={geneCountsExpanded}
-                >
-                  <span className="panel-toggle-text">
-                    <span className="panel-toggle-title">Gene-level patient counts</span>
-                    <span className="panel-toggle-meta">
-                      {result.stats.gene_patient_counts.length} genes from cBioPortal
-                    </span>
-                  </span>
-                  <span className="panel-toggle-icon" aria-hidden="true">
-                    {geneCountsExpanded ? "−" : "+"}
-                  </span>
-                </button>
-                {geneCountsExpanded ? (
-                  <div className="gene-table-wrap">
-                    <table className="gene-table">
-                      <thead>
-                        <tr>
-                          <th>Gene</th>
-                          <th>With mutation</th>
-                          <th>Without mutation</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {result.stats.gene_patient_counts.map((row) => (
-                          <tr key={row.gene}>
-                            <td>{row.gene}</td>
-                            <td>{row.patients_with_mutation.toLocaleString()}</td>
-                            <td>{row.patients_without_mutation.toLocaleString()}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : null}
-              </article>
-            ) : null}
-
-            {result.stats.gene_patient_counts?.length ? (
+            {result.stats.gene_patient_counts?.length || result.depmap?.gene_effect_summary?.length ? (
               <GeneMolecularPathwaySection
                 genePatientCounts={result.stats.gene_patient_counts}
+                depmap={result.depmap}
                 eligibility={result.eligibility}
                 expanded={genePathwayExpanded}
                 onToggle={() => setGenePathwayExpanded((value) => !value)}
@@ -2150,6 +2702,14 @@ export default function App() {
                 onDrugToggle={(drugName) =>
                   setActiveDrug((current) => (current === drugName ? "" : drugName))
                 }
+              />
+            ) : null}
+
+            {result.depmap ? (
+              <DepMapPrismSensitivitySection
+                depmap={result.depmap}
+                expanded={depmapPrismExpanded}
+                onToggle={() => setDepmapPrismExpanded((value) => !value)}
               />
             ) : null}
 

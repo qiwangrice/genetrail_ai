@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from control_stats import load_control_stats
 from drug_search import search_combined_drugs
 from feasibility_summary import feasibility_summary
+from search_depmap import search_depmap_for_cell_lines
 
 load_dotenv()
 
@@ -169,6 +170,7 @@ def _run_search_analyses(result: TrialEligibility) -> dict[str, dict]:
             result.required_biomarkers,
             result.cancer_type,
         )
+        depmap_future = executor.submit(search_depmap_for_cell_lines, result)
 
         return {
             "stats": stats_future.result(),
@@ -177,6 +179,7 @@ def _run_search_analyses(result: TrialEligibility) -> dict[str, dict]:
             "clinical_trials": clinical_trials_future.result(),
             "completed_clinical_trials": completed_trials_future.result(),
             "drugs": drugs_future.result(),
+            "depmap": depmap_future.result(),
         }
 
 
@@ -255,6 +258,25 @@ if __name__ == "__main__":
         payload=drugs,
         run_timestamp=run_timestamp,
     )
+
+    depmap = search_results["depmap"]
+    depmap_payload = dict(depmap)
+    depmap_payload.pop("models", None)
+    _save_search_result(
+        results_dir,
+        prefix="depmap",
+        label="DepMap cell lines from Neon",
+        payload=depmap_payload,
+        run_timestamp=run_timestamp,
+    )
+    if depmap.get("models"):
+        _save_search_result(
+            results_dir,
+            prefix="depmap_models",
+            label="DepMap eligible cell line details",
+            payload={"models": depmap["models"], "models_returned": depmap["models_returned"]},
+            run_timestamp=run_timestamp,
+        )
 
     control_stats = load_control_stats()
     patient_metadata = dict(search_results["patient_metadata"])

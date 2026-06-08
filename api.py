@@ -22,6 +22,7 @@ from feasibility_summary import feasibility_summary
 from feedback_store import save_user_feedback
 from main import extract_trial_eligibility
 from drug_search import search_combined_drugs
+from search_depmap import search_depmap_for_cell_lines
 from vicc_search import search_vicc_drugs
 
 load_dotenv()
@@ -80,6 +81,7 @@ class AnalyzeResponse(BaseModel):
     clinical_trials: dict[str, Any]
     completed_clinical_trials: dict[str, Any]
     existing_drugs: dict[str, Any]
+    depmap: dict[str, Any]
     feasibility_summary: dict[str, Any]
 
 
@@ -129,6 +131,8 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
             eligibility.required_biomarkers,
             eligibility.cancer_type,
         )
+        depmap = search_depmap_for_cell_lines(eligibility, limit=0)
+        depmap.pop("models", None)
         summary = feasibility_summary(
             eligibility,
             stats,
@@ -153,5 +157,6 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
         clinical_trials=clinical_trials,
         completed_clinical_trials=completed_clinical_trials,
         existing_drugs=existing_drugs,
+        depmap=depmap,
         feasibility_summary=summary,
     )
