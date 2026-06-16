@@ -13,6 +13,7 @@ from cbioportal_search import (
 from clinicaltrails_search import (
     search_active_clinical_trials,
     search_completed_clinical_trials,
+    search_trial_sites,
 )
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -165,6 +166,7 @@ def _run_search_analyses(result: TrialEligibility) -> dict[str, dict]:
         metadata_future = executor.submit(search_neon_for_patient_metadata, result)
         clinical_trials_future = executor.submit(search_active_clinical_trials, result)
         completed_trials_future = executor.submit(search_completed_clinical_trials, result)
+        trial_sites_future = executor.submit(search_trial_sites, result)
         drugs_future = executor.submit(
             search_combined_drugs,
             result.required_biomarkers,
@@ -178,6 +180,7 @@ def _run_search_analyses(result: TrialEligibility) -> dict[str, dict]:
             "patient_metadata": metadata_future.result(),
             "clinical_trials": clinical_trials_future.result(),
             "completed_clinical_trials": completed_trials_future.result(),
+            "trial_sites": trial_sites_future.result(),
             "drugs": drugs_future.result(),
             "depmap": depmap_future.result(),
         }
@@ -249,6 +252,30 @@ if __name__ == "__main__":
         payload=completed_clinical_trials,
         run_timestamp=run_timestamp,
     )
+
+    trial_sites = search_results["trial_sites"]
+    trial_sites_payload = dict(trial_sites)
+    trial_sites_payload.pop("matched_trials", None)
+    _save_search_result(
+        results_dir,
+        prefix="trial_sites",
+        label="Trial sites from ClinicalTrials.gov",
+        payload=trial_sites_payload,
+        run_timestamp=run_timestamp,
+    )
+    if trial_sites.get("trial_sites"):
+        _save_search_result(
+            results_dir,
+            prefix="trial_site_rows",
+            label="Trial site rows",
+            payload={
+                "trial_site_count": trial_sites.get("trial_site_count"),
+                "unique_site_count": trial_sites.get("unique_site_count"),
+                "trial_sites": trial_sites.get("trial_sites"),
+                "unique_sites": trial_sites.get("unique_sites"),
+            },
+            run_timestamp=run_timestamp,
+        )
 
     drugs = search_results["drugs"]
     _save_search_result(

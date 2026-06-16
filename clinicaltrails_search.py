@@ -18,6 +18,7 @@ FINISHED_STATUSES = (
     "WITHDRAWN",
     "SUSPENDED",
 )
+ALL_MATCHED_TRIAL_STATUSES = ACTIVE_STATUSES + FINISHED_STATUSES
 STUDY_STOPPED_STATUSES = (
     "TERMINATED",
     "WITHDRAWN",
@@ -190,6 +191,289 @@ def _parse_study(study: dict) -> dict | None:
     }
 
 
+CONTROL_ARM_TYPES = frozenset(
+    {
+        "PLACEBO_COMPARATOR",
+        "ACTIVE_COMPARATOR",
+        "SHAM_COMPARATOR",
+        "NO_INTERVENTION",
+    }
+)
+_CONTROL_TITLE_MARKERS = (
+    "placebo",
+    "control arm",
+    " comparator",
+    "standard of care",
+    "sham",
+)
+_ENROLLMENT_SCOPE_NOTE = (
+    "Treatment and control counts are trial-level totals from ClinicalTrials.gov; "
+    "per-site enrollment is not published."
+)
+
+
+def _normalize_arm_title(title: str) -> str:
+    return re.sub(r"\s+", " ", str(title or "").strip().lower())
+
+
+def _is_control_arm_label(label: str, control_labels: set[str]) -> bool:
+    normalized = _normalize_arm_title(label)
+    if normalized in control_labels:
+        return True
+    padded = f" {normalized} "
+    return any(marker in padded for marker in _CONTROL_TITLE_MARKERS)
+
+
+def _parse_subject_count(value) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    try:
+        return int(float(text))
+    except ValueError:
+        return None
+
+
+def _extract_trial_enrollment(study: dict) -> dict:
+    """
+    Extract treatment vs control enrollment for a trial.
+
+    ClinicalTrials.gov does not publish per-facility arm counts. When available,
+    arm-level STARTED counts come from resultsSection.participantFlowModule;
+    otherwise only trial-level enrollmentInfo may be present.
+    """
+    protocol = study.get("protocolSection") or {}
+    design = protocol.get("designModule") or {}
+    enrollment_info = design.get("enrollmentInfo") or {}
+    total_enrolled = _parse_subject_count(enrollment_info.get("count"))
+    enrollment_type = enrollment_info.get("type")
+
+    arms = (protocol.get("armsInterventionsModule") or {}).get("armGroups") or []
+    control_labels = {
+        _normalize_arm_title(arm.get("label"))
+        for arm in arms
+        if arm.get("type") in CONTROL_ARM_TYPES and arm.get("label")
+    }
+
+    patients_enrolled: int | None = None
+    control_enrolled: int | None = None
+    enrollment_source: str | None = None
+
+    participant_flow = (study.get("resultsSection") or {}).get("participantFlowModule") or {}
+    groups = participant_flow.get("groups") or []
+    group_id_to_label = {
+        group.get("id"): group.get("title")
+        for group in groups
+        if group.get("id")
+    }
+
+    started_counts: dict[str, int] = {}
+    for period in participant_flow.get("periods") or []:
+        for milestone in period.get("milestones") or []:
+            if str(milestone.get("type") or "").upper() != "STARTED":
+                continue
+            for achievement in milestone.get("achievements") or []:
+                group_id = achievement.get("groupId")
+                count = _parse_subject_count(achievement.get("numSubjects"))
+                if group_id and count is not None:
+                    started_counts[group_id] = count
+
+    if started_counts:
+        treatment_total = 0
+        control_total = 0
+        treatment_found = False
+        control_found = False
+        for group_id, count in started_counts.items():
+            label = group_id_to_label.get(group_id) or ""
+            if _is_control_arm_label(label, control_labels):
+                control_total += count
+                control_found = True
+            else:
+                treatment_total += count
+                treatment_found = True
+        patients_enrolled = treatment_total if treatment_found else None
+        control_enrolled = control_total if control_found else None
+        enrollment_source = "participant_flow"
+    elif total_enrolled is not None and len(arms) <= 1:
+        patients_enrolled = total_enrolled
+        control_enrolled = 0
+        enrollment_source = "design_module"
+    elif total_enrolled is not None:
+        enrollment_source = "design_module_total_only"
+
+    if enrollment_source:
+        enrollment_note = _ENROLLMENT_SCOPE_NOTE
+    else:
+        enrollment_note = "Enrollment counts not available for this trial."
+
+    return {
+        "patients_enrolled": patients_enrolled,
+        "control_enrolled": control_enrolled,
+        "total_enrolled": total_enrolled,
+        "enrollment_type": enrollment_type,
+        "enrollment_source": enrollment_source,
+        "enrollment_scope": "trial",
+        "enrollment_note": enrollment_note,
+    }
+
+
+def _parse_study_locations(study: dict, trial: dict) -> List[dict]:
+    protocol = study.get("protocolSection") or {}
+    locations_module = protocol.get("contactsLocationsModule") or {}
+    locations = locations_module.get("locations") or []
+    sites: List[dict] = []
+    enrollment = _extract_trial_enrollment(study)
+
+    for location in locations:
+        site_name = str(location.get("facility") or "").strip() or None
+        city = str(location.get("city") or "").strip() or None
+        state = str(location.get("state") or "").strip() or None
+        country = str(location.get("country") or "").strip() or None
+        if not any([site_name, city, state, country]):
+            continue
+
+        geo_point = location.get("geoPoint") or {}
+        latitude = geo_point.get("lat")
+        longitude = geo_point.get("lon")
+
+        sites.append(
+            {
+                "site_name": site_name,
+                "city": city,
+                "state": state,
+                "country": country,
+                "latitude": float(latitude) if latitude is not None else None,
+                "longitude": float(longitude) if longitude is not None else None,
+                "site_status": location.get("status"),
+                "trial_status": trial.get("status"),
+                "nct_id": trial.get("nct_id"),
+                "trial_title": trial.get("title"),
+                "trial_url": trial.get("url"),
+                **enrollment,
+            }
+        )
+
+    return sites
+
+
+def _site_dedupe_key(site: dict) -> tuple[str, str, str, str]:
+    return (
+        str(site.get("site_name") or "").strip().lower(),
+        str(site.get("city") or "").strip().lower(),
+        str(site.get("state") or "").strip().lower(),
+        str(site.get("country") or "").strip().lower(),
+    )
+
+
+def _trial_site_summary(site: dict) -> dict:
+    return {
+        "nct_id": site.get("nct_id"),
+        "trial_title": site.get("trial_title"),
+        "trial_status": site.get("trial_status"),
+        "site_status": site.get("site_status"),
+        "trial_url": site.get("trial_url"),
+        "patients_enrolled": site.get("patients_enrolled"),
+        "control_enrolled": site.get("control_enrolled"),
+        "total_enrolled": site.get("total_enrolled"),
+        "enrollment_type": site.get("enrollment_type"),
+        "enrollment_source": site.get("enrollment_source"),
+        "enrollment_scope": site.get("enrollment_scope"),
+        "enrollment_note": site.get("enrollment_note"),
+    }
+
+
+def _dedupe_trials_by_nct(trials: Iterable[dict]) -> List[dict]:
+    seen: set[str] = set()
+    deduped: List[dict] = []
+    for trial in trials:
+        nct_id = trial.get("nct_id")
+        if not nct_id or nct_id in seen:
+            continue
+        seen.add(nct_id)
+        deduped.append(trial)
+    return deduped
+
+
+def _summarize_unique_site(record: dict) -> dict:
+    trials = _dedupe_trials_by_nct(record.get("trials") or [])
+    record["trials"] = trials
+    record["trial_count"] = len(trials)
+
+    active_trial_count = 0
+    completed_trial_count = 0
+    total_patients_enrolled = 0
+    total_control_enrolled = 0
+    patients_found = False
+    control_found = False
+
+    for trial in trials:
+        status = str(trial.get("trial_status") or "").upper()
+        if status in ACTIVE_STATUSES:
+            active_trial_count += 1
+        else:
+            completed_trial_count += 1
+
+        patients = trial.get("patients_enrolled")
+        control = trial.get("control_enrolled")
+        if isinstance(patients, (int, float)):
+            total_patients_enrolled += int(patients)
+            patients_found = True
+        if isinstance(control, (int, float)):
+            total_control_enrolled += int(control)
+            control_found = True
+
+    record["active_trial_count"] = active_trial_count
+    record["completed_trial_count"] = completed_trial_count
+    record["total_patients_enrolled"] = (
+        total_patients_enrolled if patients_found else None
+    )
+    record["total_control_enrolled"] = (
+        total_control_enrolled if control_found else None
+    )
+    return record
+
+
+def _aggregate_unique_sites(site_rows: Iterable[dict]) -> List[dict]:
+    grouped: dict[tuple[str, str, str, str], dict] = {}
+
+    for site in site_rows:
+        key = _site_dedupe_key(site)
+        if not any(key):
+            continue
+
+        existing = grouped.get(key)
+        if existing is None:
+            grouped[key] = {
+                "site_name": site.get("site_name"),
+                "city": site.get("city"),
+                "state": site.get("state"),
+                "country": site.get("country"),
+                "latitude": site.get("latitude"),
+                "longitude": site.get("longitude"),
+                "trial_count": 1,
+                "trials": [_trial_site_summary(site)],
+            }
+            continue
+
+        existing["trial_count"] += 1
+        existing["trials"].append(_trial_site_summary(site))
+        if existing.get("latitude") is None and site.get("latitude") is not None:
+            existing["latitude"] = site.get("latitude")
+            existing["longitude"] = site.get("longitude")
+
+    unique_sites = [_summarize_unique_site(record) for record in grouped.values()]
+    unique_sites.sort(
+        key=lambda item: (
+            -(item.get("trial_count") or 0),
+            str(item.get("country") or ""),
+            str(item.get("state") or ""),
+            str(item.get("city") or ""),
+            str(item.get("site_name") or ""),
+        )
+    )
+    return unique_sites
+
+
 def _parse_p_value(value) -> float | None:
     if value is None:
         return None
@@ -320,6 +604,7 @@ def _search_clinical_trials(
     page_size: int,
     timeout_seconds: int,
     include_outcome_classification: bool = False,
+    include_locations: bool = False,
 ) -> dict:
     params = {
         "query.cond": cancer_type,
@@ -332,6 +617,7 @@ def _search_clinical_trials(
         params["query.term"] = search_terms
 
     matched_trials: List[dict] = []
+    trial_sites: List[dict] = []
     scanned_trials = 0
     pages_fetched = 0
     next_page_token: str | None = None
@@ -376,6 +662,10 @@ def _search_clinical_trials(
             }
             if include_outcome_classification:
                 record.update(_classify_finished_trial_outcome(study, trial))
+            if include_locations:
+                sites = _parse_study_locations(study, trial)
+                record["sites"] = sites
+                trial_sites.extend(sites)
 
             matched_trials.append(record)
             if len(matched_trials) >= max_results:
@@ -385,11 +675,14 @@ def _search_clinical_trials(
         if not next_page_token:
             break
 
-    return {
+    result = {
         "pages_fetched": pages_fetched,
         "trials_scanned": scanned_trials,
         "matched_trials": matched_trials,
     }
+    if include_locations:
+        result["trial_sites"] = trial_sites
+    return result
 
 
 def _resolve_trial_search_inputs(
@@ -535,6 +828,62 @@ def search_completed_clinical_trials(
     }
 
 
+def search_trial_sites(
+    result,
+    max_pages: int = 5,
+    max_results: int = 50,
+    page_size: int = 100,
+    timeout_seconds: int = 30,
+) -> dict:
+    """
+    Search ClinicalTrials.gov for trials matching eligibility and extract site locations.
+
+    Returns site name, city, state, country, site-level status, parent trial status,
+    and trial-level treatment/control enrollment counts for every listed location.
+    Per-site arm enrollment is not published on ClinicalTrials.gov; counts are repeated
+    on each site row with enrollment_scope="trial".
+    """
+    required = result.required_biomarkers or []
+    excluded = result.excluded_biomarkers or []
+    cancer_type = _condition_query(getattr(result, "cancer_type", None))
+
+    search = _search_clinical_trials(
+        cancer_type=cancer_type,
+        required=required,
+        excluded=excluded,
+        statuses=ALL_MATCHED_TRIAL_STATUSES,
+        max_pages=max_pages,
+        max_results=max_results,
+        page_size=page_size,
+        timeout_seconds=timeout_seconds,
+        include_outcome_classification=False,
+        include_locations=True,
+    )
+
+    trial_sites = search.get("trial_sites") or []
+    unique_sites = _aggregate_unique_sites(trial_sites)
+    matched_trials = search["matched_trials"]
+    for trial in matched_trials:
+        trial.pop("sites", None)
+
+    return {
+        "data_source": "clinicaltrials.gov_api_v2",
+        "search_url": CLINICALTRIALS_API_BASE,
+        "cancer_type": cancer_type,
+        "trial_statuses": list(ALL_MATCHED_TRIAL_STATUSES),
+        "required_biomarkers": required,
+        "excluded_biomarkers": excluded,
+        "pages_fetched": search["pages_fetched"],
+        "trials_scanned": search["trials_scanned"],
+        "matched_trial_count": len(matched_trials),
+        "trial_site_count": len(trial_sites),
+        "unique_site_count": len(unique_sites),
+        "matched_trials": matched_trials,
+        "trial_sites": trial_sites,
+        "unique_sites": unique_sites,
+    }
+
+
 if __name__ == "__main__":
     import json
     from types import SimpleNamespace
@@ -548,3 +897,5 @@ if __name__ == "__main__":
     print(json.dumps(search_active_clinical_trials(demo, max_pages=2, max_results=5), indent=2))
     print("\nCompleted trials:")
     print(json.dumps(search_completed_clinical_trials(demo, max_pages=2, max_results=10), indent=2))
+    print("\nTrial sites:")
+    print(json.dumps(search_trial_sites(demo, max_pages=2, max_results=5), indent=2))

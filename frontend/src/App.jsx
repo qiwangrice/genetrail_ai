@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { TrialSitesMapSection } from "./TrialSitesMap.jsx";
 import "./App.css";
 
 const GENE_PROTEIN_INFO = {
@@ -166,6 +168,7 @@ const ANALYSIS_STEPS = [
   "Searching NSCLC patient cohort",
   "Matching treatments and survival",
   "Searching active and completed trials",
+  "Mapping matched trial sites",
   "Looking up existing therapies",
   "Searching DepMap cell lines",
   "Generating feasibility summary",
@@ -1472,7 +1475,172 @@ const PRISM_SCREEN_COLORS = {
   secondary: "#8a7d9b",
 };
 
-function DepMapPrismSensitivityChart({ drugSummary }) {
+function formatPrismDrugField(value) {
+  const text = String(value ?? "").trim();
+  if (!text || text.toUpperCase() === "NA") {
+    return null;
+  }
+  return text;
+}
+
+function prismDrugRowKey(row) {
+  const label = row.drug_name || row.broad_id || "unknown";
+  return `${row.screen_type || "unknown"}-${row.broad_id || label}`;
+}
+
+function DepMapPrismDrugTooltip({ row, onClose, tooltipRef, style, tooltipId }) {
+  const drugName = formatPrismDrugField(row.drug_name) || row.broad_id || "Unknown compound";
+  const fields = [
+    ["Broad ID", formatPrismDrugField(row.broad_id)],
+    ["MOA", formatPrismDrugField(row.moa)],
+    ["Target", formatPrismDrugField(row.target)],
+    ["Indication", formatPrismDrugField(row.indication)],
+    ["Disease area", formatPrismDrugField(row.disease_area)],
+    ["Phase", formatPrismDrugField(row.phase)],
+    ["Screen", formatPrismDrugField(row.screen_type)],
+    [
+      "Mean log-fold change",
+      row.mean_log_fold_change != null ? Number(row.mean_log_fold_change).toFixed(2) : null,
+    ],
+    [
+      "Best log-fold change",
+      row.best_log_fold_change != null ? Number(row.best_log_fold_change).toFixed(2) : null,
+    ],
+    [
+      "Sensitive cell lines",
+      row.sensitive_model_count != null
+        ? Number(row.sensitive_model_count).toLocaleString()
+        : null,
+    ],
+  ].filter(([, value]) => value);
+
+  return (
+    <div
+      ref={tooltipRef}
+      id={tooltipId}
+      className="prism-drug-tooltip"
+      style={style}
+      role="tooltip"
+    >
+      <div className="prism-drug-tooltip-header">
+        <p className="prism-drug-tooltip-title">{drugName}</p>
+        <button
+          type="button"
+          className="prism-drug-tooltip-close"
+          onClick={onClose}
+          aria-label={`Close ${drugName} details`}
+        >
+          Close
+        </button>
+      </div>
+      <dl className="prism-drug-tooltip-meta">
+        {fields.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function computePrismTooltipStyle(buttonEl, tooltipEl) {
+  const margin = 12;
+  const buttonRect = buttonEl.getBoundingClientRect();
+  const tooltipWidth = tooltipEl.offsetWidth;
+  const tooltipHeight = tooltipEl.offsetHeight;
+
+  let top = buttonRect.bottom + margin;
+  if (top + tooltipHeight > window.innerHeight - margin) {
+    top = buttonRect.top - tooltipHeight - margin;
+  }
+  top = Math.max(margin, Math.min(top, window.innerHeight - tooltipHeight - margin));
+
+  let left = buttonRect.left;
+  if (left + tooltipWidth > window.innerWidth - margin) {
+    left = window.innerWidth - tooltipWidth - margin;
+  }
+  left = Math.max(margin, left);
+
+  return {
+    position: "fixed",
+    top: `${top}px`,
+    left: `${left}px`,
+    visibility: "visible",
+    zIndex: 1000,
+  };
+}
+
+const HIDDEN_PRISM_TOOLTIP_STYLE = {
+  position: "fixed",
+  top: "-9999px",
+  left: "-9999px",
+  visibility: "hidden",
+  zIndex: 1000,
+};
+
+function PrismDrugNameButton({ row, rowKey, isActive, label, onToggle }) {
+  const buttonRef = useRef(null);
+  const tooltipRef = useRef(null);
+  const [tooltipStyle, setTooltipStyle] = useState(HIDDEN_PRISM_TOOLTIP_STYLE);
+
+  const updateTooltipPosition = useCallback(() => {
+    const button = buttonRef.current;
+    const tooltip = tooltipRef.current;
+    if (!button || !tooltip) {
+      return;
+    }
+    setTooltipStyle(computePrismTooltipStyle(button, tooltip));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!isActive) {
+      setTooltipStyle(HIDDEN_PRISM_TOOLTIP_STYLE);
+      return undefined;
+    }
+
+    updateTooltipPosition();
+    const frame = window.requestAnimationFrame(updateTooltipPosition);
+    window.addEventListener("resize", updateTooltipPosition);
+    window.addEventListener("scroll", updateTooltipPosition, true);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updateTooltipPosition);
+      window.removeEventListener("scroll", updateTooltipPosition, true);
+    };
+  }, [isActive, rowKey, updateTooltipPosition]);
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={`prism-drug-name-btn${isActive ? " prism-drug-name-btn-active" : ""}`}
+        onClick={() => onToggle(rowKey)}
+        aria-expanded={isActive}
+        aria-describedby={isActive ? `prism-drug-tooltip-${rowKey}` : undefined}
+      >
+        {label}
+      </button>
+      {isActive
+        ? createPortal(
+            <DepMapPrismDrugTooltip
+              row={row}
+              tooltipRef={tooltipRef}
+              tooltipId={`prism-drug-tooltip-${rowKey}`}
+              style={tooltipStyle}
+              onClose={() => onToggle(rowKey)}
+            />,
+            document.body
+          )
+        : null}
+    </>
+  );
+}
+
+function DepMapPrismSensitivityChart({ drugSummary, activeDrugKey, onDrugToggle }) {
   const rows = [...(drugSummary || [])].sort(
     (left, right) => left.mean_log_fold_change - right.mean_log_fold_change
   );
@@ -1496,15 +1664,20 @@ function DepMapPrismSensitivityChart({ drugSummary }) {
         const lfc = Number(row.mean_log_fold_change) || 0;
         const label = row.drug_name || row.broad_id || "Unknown compound";
         const screenType = row.screen_type || "unknown";
+        const rowKey = prismDrugRowKey(row);
+        const isActive = activeDrugKey === rowKey;
         return (
-          <div
-            className="prism-sensitivity-row"
-            key={`${screenType}-${row.broad_id || label}-${lfc}`}
-          >
+          <div className="prism-sensitivity-row" key={rowKey}>
             <div className="prism-sensitivity-label">
-              <span className="prism-drug-name" title={label}>
-                {label}
-              </span>
+              <div className="prism-sensitivity-label-wrap">
+                <PrismDrugNameButton
+                  row={row}
+                  rowKey={rowKey}
+                  isActive={isActive}
+                  label={label}
+                  onToggle={onDrugToggle}
+                />
+              </div>
               <span className={`prism-screen-badge prism-screen-badge-${screenType}`}>
                 {screenType}
               </span>
@@ -1532,13 +1705,20 @@ function DepMapPrismSensitivityChart({ drugSummary }) {
 function DepMapPrismSensitivitySection({ depmap, expanded, onToggle }) {
   const drugSummary = depmap?.drug_sensitivity_summary || [];
   const eligibleCount = depmap?.eligible_cell_lines ?? 0;
+  const [activeDrugKey, setActiveDrugKey] = useState("");
+
+  useEffect(() => {
+    if (!expanded) {
+      setActiveDrugKey("");
+    }
+  }, [expanded]);
 
   if (!depmap) {
     return null;
   }
 
   return (
-    <article className="panel panel-wide panel-collapsible">
+    <article className="panel panel-wide panel-collapsible panel-prism">
       <button
         type="button"
         className="panel-toggle"
@@ -1562,8 +1742,15 @@ function DepMapPrismSensitivitySection({ depmap, expanded, onToggle }) {
           <p className="depmap-prism-intro">
             Mean PRISM log-fold change across {eligibleCount.toLocaleString()} eligible
             lung cell lines. More negative values indicate stronger growth inhibition.
+            Click a drug name for DepMap compound details.
           </p>
-          <DepMapPrismSensitivityChart drugSummary={drugSummary} />
+          <DepMapPrismSensitivityChart
+            drugSummary={drugSummary}
+            activeDrugKey={activeDrugKey}
+            onDrugToggle={(rowKey) =>
+              setActiveDrugKey((current) => (current === rowKey ? "" : rowKey))
+            }
+          />
           <div className="prism-sensitivity-legend">
             <span className="prism-sensitivity-legend-item">
               <span
@@ -2448,6 +2635,7 @@ export default function App() {
   const [clinicalTrialsExpanded, setClinicalTrialsExpanded] = useState(false);
   const [clinicalTrialsPage, setClinicalTrialsPage] = useState(0);
   const [clinicalTrialSummaryExpanded, setClinicalTrialSummaryExpanded] = useState(true);
+  const [trialSitesMapExpanded, setTrialSitesMapExpanded] = useState(true);
   const [completedClinicalTrialsExpanded, setCompletedClinicalTrialsExpanded] =
     useState(false);
   const [completedClinicalTrialsPage, setCompletedClinicalTrialsPage] = useState(0);
@@ -2479,6 +2667,7 @@ export default function App() {
     setClinicalTrialsExpanded(false);
     setClinicalTrialsPage(0);
     setClinicalTrialSummaryExpanded(true);
+    setTrialSitesMapExpanded(true);
     setCompletedClinicalTrialsExpanded(false);
     setCompletedClinicalTrialsPage(0);
     setExistingDrugsExpanded(false);
@@ -2665,6 +2854,14 @@ export default function App() {
                 completedClinicalTrials={result.completed_clinical_trials}
                 expanded={clinicalTrialSummaryExpanded}
                 onToggle={() => setClinicalTrialSummaryExpanded((value) => !value)}
+              />
+            ) : null}
+
+            {result.trial_sites ? (
+              <TrialSitesMapSection
+                trialSites={result.trial_sites}
+                expanded={trialSitesMapExpanded}
+                onToggle={() => setTrialSitesMapExpanded((value) => !value)}
               />
             ) : null}
 

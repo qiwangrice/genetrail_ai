@@ -16,6 +16,7 @@ from cbioportal_search import (
 from clinicaltrails_search import (
     search_active_clinical_trials,
     search_completed_clinical_trials,
+    search_trial_sites,
 )
 from control_stats import load_control_stats
 from feasibility_summary import feasibility_summary
@@ -80,6 +81,7 @@ class AnalyzeResponse(BaseModel):
     control_stats: dict[str, Any]
     clinical_trials: dict[str, Any]
     completed_clinical_trials: dict[str, Any]
+    trial_sites: dict[str, Any]
     existing_drugs: dict[str, Any]
     depmap: dict[str, Any]
     feasibility_summary: dict[str, Any]
@@ -127,6 +129,8 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
             eligibility,
             max_results=50,
         )
+        trial_sites = search_trial_sites(eligibility, max_results=50)
+        trial_sites.pop("matched_trials", None)
         existing_drugs = search_combined_drugs(
             eligibility.required_biomarkers,
             eligibility.cancer_type,
@@ -156,6 +160,7 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
         control_stats=control_stats,
         clinical_trials=clinical_trials,
         completed_clinical_trials=completed_clinical_trials,
+        trial_sites=trial_sites,
         existing_drugs=existing_drugs,
         depmap=depmap,
         feasibility_summary=summary,
