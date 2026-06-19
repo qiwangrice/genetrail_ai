@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
+import uuid
+from contextlib import asynccontextmanager
 from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from posthog import Posthog
 from pydantic import BaseModel, Field
 
 from cbioportal_search import (
@@ -28,7 +31,30 @@ from vicc_search import search_vicc_drugs
 
 load_dotenv()
 
-app = FastAPI(title="GeneTrail AI", version="0.1.0")
+_posthog_client: Posthog | None = None
+
+
+def get_posthog() -> Posthog | None:
+    return _posthog_client
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _posthog_client
+    token = os.getenv("POSTHOG_PROJECT_TOKEN", "")
+    host = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
+    if token:
+        _posthog_client = Posthog(
+            project_api_key=token,
+            host=host,
+            enable_exception_autocapture=True,
+        )
+    yield
+    if _posthog_client:
+        _posthog_client.shutdown()
+
+
+app = FastAPI(title="GeneTrail AI", version="0.1.0", lifespan=lifespan)
 
 frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 extra_origins = [
@@ -107,6 +133,21 @@ def submit_feedback(payload: FeedbackRequest) -> FeedbackResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Feedback save failed: {exc}") from exc
 
+    ph = get_posthog()
+    if ph:
+        distinct_id = payload.email or f"anon-{saved.get('id', uuid.uuid4())}"
+        ph.capture(
+            distinct_id,
+            "feedback_submitted",
+            properties={
+                "rating": payload.rating,
+                "has_comment": bool(payload.comment),
+                "comment_length": len(payload.comment),
+                "page_section": payload.page_section,
+                "has_snapshot": payload.analysis_snapshot is not None,
+            },
+        )
+
     return FeedbackResponse(**saved)
 
 
@@ -115,6 +156,18 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
     protocol = payload.protocol.strip()
     if not protocol:
         raise HTTPException(status_code=400, detail="Protocol text is required.")
+
+    ph = get_posthog()
+    distinct_id = f"anon-{uuid.uuid4()}"
+
+    if ph:
+        ph.capture(
+            distinct_id,
+            "protocol_analyzed",
+            properties={
+                "protocol_length": len(protocol),
+            },
+        )
 
     try:
         eligibility = extract_trial_eligibility(protocol)
@@ -125,9 +178,11 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
         patient_metadata_stats.pop("patients", None)
         control_stats = load_control_stats()
         clinical_trials = search_active_clinical_trials(eligibility, max_results=50)
+        active_trial_sites = clinical_trials.pop("trial_sites", [])
         completed_clinical_trials = search_completed_clinical_trials(
             eligibility,
             max_results=50,
+            active_trial_sites=active_trial_sites,
         )
         trial_sites = search_trial_sites(eligibility, max_results=50)
         trial_sites.pop("matched_trials", None)
@@ -146,11 +201,44 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
             completed_clinical_trials,
             existing_drugs,
             patient_metadata_stats,
+            depmap=depmap,
+            trial_sites=trial_sites,
         )
     except RuntimeError as exc:
+        if ph:
+            ph.capture(
+                distinct_id,
+                "analysis_failed",
+                properties={"error_type": "runtime", "error_message": str(exc)},
+            )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
+        if ph:
+            ph.capture_exception(exc)
+            ph.capture(
+                distinct_id,
+                "analysis_failed",
+                properties={"error_type": "unexpected", "error_message": str(exc)},
+            )
         raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}") from exc
+
+    if ph:
+        overall_verdict = summary.get("overall_verdict", "")
+        ph.capture(
+            distinct_id,
+            "analysis_completed",
+            properties={
+                "cancer_type": eligibility.cancer_type,
+                "required_biomarker_count": len(eligibility.required_biomarkers),
+                "excluded_biomarker_count": len(eligibility.excluded_biomarkers),
+                "eligible_patients": stats.get("eligible_patients"),
+                "active_trial_count": clinical_trials.get("matched_trial_count"),
+                "completed_trial_count": completed_clinical_trials.get("matched_trial_count"),
+                "matched_drug_count": existing_drugs.get("matched_drug_count"),
+                "eligible_cell_lines": depmap.get("eligible_cell_lines"),
+                "overall_verdict_length": len(overall_verdict),
+            },
+        )
 
     return AnalyzeResponse(
         eligibility=eligibility.model_dump(),

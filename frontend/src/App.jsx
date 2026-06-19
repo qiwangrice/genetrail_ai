@@ -2625,8 +2625,145 @@ function CompletedClinicalTrialsSection({
   );
 }
 
+function EnrollmentByCountryChart({ countries }) {
+  const rows = countries || [];
+  const maxEnrollment = Math.max(...rows.map((row) => row.total_enrollment || 0), 1);
+
+  if (!rows.length) {
+    return (
+      <p className="chart-empty">
+        No country-level enrollment could be calculated from matched trials.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <div className="enrollment-by-country-legend">
+        <span className="enrollment-by-country-legend-item">
+          <span
+            className="enrollment-by-country-legend-swatch"
+            style={{ background: TRIAL_SUMMARY_COLORS.active }}
+          />
+          Active trials
+        </span>
+        <span className="enrollment-by-country-legend-item">
+          <span
+            className="enrollment-by-country-legend-swatch"
+            style={{ background: TRIAL_SUMMARY_COLORS.completed }}
+          />
+          Completed / finished trials
+        </span>
+      </div>
+
+      <div className="histogram enrollment-by-country-chart">
+        {rows.map((row) => {
+          const activeEnrollment = row.active_enrollment || 0;
+          const completedEnrollment = row.completed_enrollment || 0;
+          const totalEnrollment = row.total_enrollment || activeEnrollment + completedEnrollment;
+
+          return (
+            <div className="histogram-row" key={row.country}>
+              <div className="histogram-label">{row.country}</div>
+              <div className="histogram-bar-wrap histogram-bar-wrap-stacked">
+                {activeEnrollment ? (
+                  <div
+                    className="histogram-bar"
+                    style={{
+                      width: `${(activeEnrollment / maxEnrollment) * 100}%`,
+                      background: TRIAL_SUMMARY_COLORS.active,
+                    }}
+                    title={`Active: ${activeEnrollment.toLocaleString()}`}
+                  />
+                ) : null}
+                {completedEnrollment ? (
+                  <div
+                    className="histogram-bar"
+                    style={{
+                      width: `${(completedEnrollment / maxEnrollment) * 100}%`,
+                      background: TRIAL_SUMMARY_COLORS.completed,
+                    }}
+                    title={`Completed: ${completedEnrollment.toLocaleString()}`}
+                  />
+                ) : null}
+              </div>
+              <div className="histogram-count">{totalEnrollment.toLocaleString()}</div>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function EnrollmentByCountrySection({
+  completedClinicalTrials,
+  clinicalTrials,
+  expanded,
+  onToggle,
+}) {
+  const summary = completedClinicalTrials?.enrollment_by_country;
+  const countries = summary?.countries || [];
+  const activeTrialCount = clinicalTrials?.matched_trial_count ?? 0;
+  const completedTrialCount = completedClinicalTrials?.matched_trial_count ?? 0;
+
+  return (
+    <article className="panel panel-wide panel-collapsible">
+      <button
+        type="button"
+        className="panel-toggle"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <span className="panel-toggle-text">
+          <span className="panel-toggle-title">Enrollment by country</span>
+          <span className="panel-toggle-meta">
+            {countries.length.toLocaleString()} countries from{" "}
+            {activeTrialCount.toLocaleString()} active and{" "}
+            {completedTrialCount.toLocaleString()} completed / finished trials
+          </span>
+        </span>
+        <span className="panel-toggle-icon" aria-hidden="true">
+          {expanded ? "−" : "+"}
+        </span>
+      </button>
+
+      {expanded ? (
+        <div className="enrollment-by-country-wrap">
+          <p className="enrollment-by-country-intro">
+            Total enrollment allocated to each country from matched trial locations.
+            Active and completed trials are shown separately. Trial-level CT.gov enrollment
+            is split across countries by listed site count.
+          </p>
+
+          {summary?.trials_with_enrollment != null ? (
+            <p className="enrollment-by-country-meta">
+              {(summary.total_enrollment || 0).toLocaleString()} total allocated enrollment
+              {(summary.active_enrollment || summary.completed_enrollment) != null ? (
+                <>
+                  {" "}
+                  ({(summary.active_enrollment || 0).toLocaleString()} active,{" "}
+                  {(summary.completed_enrollment || 0).toLocaleString()} completed)
+                </>
+              ) : null}{" "}
+              across {summary.trials_with_enrollment.toLocaleString()} trials with reported
+              enrollment.
+            </p>
+          ) : null}
+
+          <EnrollmentByCountryChart countries={countries} />
+
+          {summary?.enrollment_note ? (
+            <p className="enrollment-by-country-note">{summary.enrollment_note}</p>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 export default function App() {
-  const [protocol, setProtocol] = useState("");
+  const [protocol, setProtocol] = useState(EXAMPLE_PROTOCOL);
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
   const [error, setError] = useState("");
@@ -2639,6 +2776,7 @@ export default function App() {
   const [completedClinicalTrialsExpanded, setCompletedClinicalTrialsExpanded] =
     useState(false);
   const [completedClinicalTrialsPage, setCompletedClinicalTrialsPage] = useState(0);
+  const [enrollmentByCountryExpanded, setEnrollmentByCountryExpanded] = useState(false);
   const [existingDrugsExpanded, setExistingDrugsExpanded] = useState(false);
   const [depmapPrismExpanded, setDepmapPrismExpanded] = useState(false);
   const [activeDrug, setActiveDrug] = useState("");
@@ -2670,6 +2808,7 @@ export default function App() {
     setTrialSitesMapExpanded(true);
     setCompletedClinicalTrialsExpanded(false);
     setCompletedClinicalTrialsPage(0);
+    setEnrollmentByCountryExpanded(false);
     setExistingDrugsExpanded(false);
     setDepmapPrismExpanded(false);
     setActiveDrug("");
@@ -2732,14 +2871,6 @@ export default function App() {
           <div className="actions">
             <button type="submit" className="search-button" disabled={loading}>
               {loading ? "Analyzing..." : "Analyze protocol"}
-            </button>
-            <button
-              type="button"
-              className="ghost-button"
-              onClick={() => setProtocol(EXAMPLE_PROTOCOL)}
-              disabled={loading}
-            >
-              Use example
             </button>
           </div>
         </form>
@@ -2884,6 +3015,15 @@ export default function App() {
                 }
                 page={completedClinicalTrialsPage}
                 onPageChange={setCompletedClinicalTrialsPage}
+              />
+            ) : null}
+
+            {result.completed_clinical_trials?.enrollment_by_country ? (
+              <EnrollmentByCountrySection
+                completedClinicalTrials={result.completed_clinical_trials}
+                clinicalTrials={result.clinical_trials}
+                expanded={enrollmentByCountryExpanded}
+                onToggle={() => setEnrollmentByCountryExpanded((value) => !value)}
               />
             ) : null}
 

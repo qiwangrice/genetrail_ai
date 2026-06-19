@@ -46,6 +46,127 @@ class FeasibilitySummaryResult(BaseModel):
     suggestions_to_improve_feasibility: list[str] = Field(default_factory=list)
 
 
+FEASIBILITY_SUMMARY_TOOL_NAME = "submit_feasibility_summary"
+
+FEASIBILITY_DIMENSION_LABELS = (
+    "Biomarker rationale",
+    "Protocol clarity",
+    "Enrollment speed",
+    "Patient demographic fit",
+    "RWD treatment data feasibility",
+    "Overall survival data",
+)
+
+FEASIBILITY_SUMMARY_TOOL = {
+    "type": "function",
+    "function": {
+        "name": FEASIBILITY_SUMMARY_TOOL_NAME,
+        "description": (
+            "Submit the structured oncology clinical trial feasibility assessment "
+            "derived from GeneTrail search results."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "overall_verdict": {
+                    "type": "string",
+                    "description": "1-2 sentence feasibility conclusion.",
+                },
+                "dimensions": {
+                    "type": "array",
+                    "description": (
+                        "Six feasibility dimension ratings with data-backed rationale."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "dimension": {
+                                "type": "string",
+                                "enum": list(FEASIBILITY_DIMENSION_LABELS),
+                            },
+                            "rating": {
+                                "type": "string",
+                                "enum": list(RATING_VALUES),
+                            },
+                            "why": {
+                                "type": "string",
+                                "description": (
+                                    "Rationale citing specific numbers from the search context."
+                                ),
+                            },
+                        },
+                        "required": ["dimension", "rating", "why"],
+                    },
+                    "minItems": 6,
+                    "maxItems": 6,
+                },
+                "recommended_endpoints": {
+                    "type": "object",
+                    "properties": {
+                        "recommended_phase": {
+                            "type": "string",
+                            "description": "e.g. Phase 2 single-arm or Phase 3 randomized",
+                        },
+                        "primary_endpoint": {"type": "string"},
+                        "primary_rationale": {"type": "string"},
+                        "secondary_endpoints": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "secondary_rationale": {"type": "string"},
+                    },
+                    "required": [
+                        "recommended_phase",
+                        "primary_endpoint",
+                        "primary_rationale",
+                        "secondary_endpoints",
+                        "secondary_rationale",
+                    ],
+                },
+                "suggestions_to_improve_feasibility": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": [
+                "overall_verdict",
+                "dimensions",
+                "recommended_endpoints",
+                "suggestions_to_improve_feasibility",
+            ],
+        },
+    },
+}
+
+
+def _parse_tool_call_arguments(response: Any) -> dict[str, Any]:
+    message = response.choices[0].message
+    tool_calls = message.tool_calls or []
+    if not tool_calls:
+        fallback = (message.content or "").strip()
+        if fallback:
+            return _parse_json_response(fallback)
+        raise ValueError("Model did not return a feasibility summary tool call.")
+
+    tool_call = tool_calls[0]
+    if tool_call.function.name != FEASIBILITY_SUMMARY_TOOL_NAME:
+        raise ValueError(
+            f"Unexpected tool call: {tool_call.function.name!r}. "
+            f"Expected {FEASIBILITY_SUMMARY_TOOL_NAME!r}."
+        )
+
+    try:
+        data = json.loads(tool_call.function.arguments or "{}")
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Invalid JSON in tool arguments:\n{tool_call.function.arguments}"
+        ) from exc
+
+    if not isinstance(data, dict):
+        raise ValueError("Feasibility summary tool arguments must be a JSON object.")
+    return data
+
+
 def _parse_json_response(raw_text: str) -> dict:
     text = raw_text.strip()
     fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
@@ -177,6 +298,125 @@ def _summarize_patient_metadata(
     }
 
 
+def _summarize_depmap(depmap: dict[str, Any]) -> dict[str, Any]:
+    if not depmap:
+        return {}
+
+    gene_effects = depmap.get("gene_effect_summary") or []
+    strong_dependency = [
+        gene
+        for gene in gene_effects
+        if gene.get("mean_gene_effect") is not None and gene["mean_gene_effect"] <= -0.5
+    ]
+
+    drug_summary = depmap.get("drug_sensitivity_summary") or []
+    top_sensitive = [
+        {
+            "drug_name": row.get("drug_name"),
+            "screen_type": row.get("screen_type"),
+            "mean_log_fold_change": row.get("mean_log_fold_change"),
+            "best_log_fold_change": row.get("best_log_fold_change"),
+            "sensitive_model_count": row.get("sensitive_model_count"),
+            "moa": row.get("moa"),
+            "target": row.get("target"),
+            "phase": row.get("phase"),
+        }
+        for row in drug_summary[:8]
+    ]
+
+    return {
+        "eligible_cell_lines": depmap.get("eligible_cell_lines"),
+        "total_cell_lines": depmap.get("total_cell_lines"),
+        "cell_lines_with_required_biomarkers": depmap.get(
+            "cell_lines_with_required_biomarkers"
+        ),
+        "strong_gene_dependency_count": len(strong_dependency),
+        "strong_gene_dependencies": [
+            {
+                "gene_symbol": gene.get("gene_symbol"),
+                "mean_gene_effect": gene.get("mean_gene_effect"),
+                "model_count": gene.get("model_count"),
+            }
+            for gene in strong_dependency[:5]
+        ],
+        "gene_effect_summary": gene_effects[:6],
+        "prism_drug_count": len(drug_summary),
+        "top_prism_sensitive_drugs": top_sensitive,
+    }
+
+
+def _summarize_trial_sites(trial_sites: dict[str, Any]) -> dict[str, Any]:
+    if not trial_sites:
+        return {}
+
+    unique_sites = trial_sites.get("unique_sites") or []
+    country_counts: dict[str, int] = {}
+    sites_with_coordinates = 0
+
+    for site in unique_sites:
+        country = str(site.get("country") or "").strip()
+        if country:
+            country_counts[country] = country_counts.get(country, 0) + 1
+        if site.get("latitude") is not None and site.get("longitude") is not None:
+            sites_with_coordinates += 1
+
+    top_countries = sorted(country_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+
+    return {
+        "matched_trial_count": trial_sites.get("matched_trial_count"),
+        "trial_site_count": trial_sites.get("trial_site_count"),
+        "unique_site_count": trial_sites.get("unique_site_count"),
+        "unique_country_count": len(country_counts),
+        "sites_with_coordinates": sites_with_coordinates,
+        "top_countries_by_unique_site_count": [
+            {"country": country, "unique_site_count": count}
+            for country, count in top_countries
+        ],
+        "sample_unique_sites": [
+            {
+                "site_name": site.get("site_name"),
+                "city": site.get("city"),
+                "state": site.get("state"),
+                "country": site.get("country"),
+                "trial_count": site.get("trial_count"),
+            }
+            for site in unique_sites[:5]
+        ],
+    }
+
+
+def _summarize_enrollment_by_country(summary: dict[str, Any]) -> dict[str, Any]:
+    if not summary:
+        return {}
+
+    countries = summary.get("countries") or []
+
+    return {
+        "total_enrollment": summary.get("total_enrollment"),
+        "active_enrollment": summary.get("active_enrollment"),
+        "completed_enrollment": summary.get("completed_enrollment"),
+        "trials_with_enrollment": summary.get("trials_with_enrollment"),
+        "active_trials_with_enrollment": summary.get("active_trials_with_enrollment"),
+        "completed_trials_with_enrollment": summary.get(
+            "completed_trials_with_enrollment"
+        ),
+        "active_matched_trial_count": summary.get("active_matched_trial_count"),
+        "completed_matched_trial_count": summary.get("completed_matched_trial_count"),
+        "country_count": len(countries),
+        "top_countries": [
+            {
+                "country": row.get("country"),
+                "total_enrollment": row.get("total_enrollment"),
+                "active_enrollment": row.get("active_enrollment"),
+                "completed_enrollment": row.get("completed_enrollment"),
+                "trial_count": row.get("trial_count"),
+            }
+            for row in countries[:10]
+        ],
+        "enrollment_note": summary.get("enrollment_note"),
+    }
+
+
 def _summarize_drugs(existing_drugs: dict[str, Any]) -> dict[str, Any]:
     sensitive = 0
     resistant = 0
@@ -215,6 +455,8 @@ def _build_search_context(
     completed_clinical_trials: dict[str, Any],
     existing_drugs: dict[str, Any],
     patient_metadata_stats: dict[str, Any] | None = None,
+    depmap: dict[str, Any] | None = None,
+    trial_sites: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     eligibility_data = _as_dict(eligibility)
     trial_samples = [
@@ -267,6 +509,11 @@ def _build_search_context(
             "outcome_summary": completed_clinical_trials.get("outcome_summary") or {},
             "sample_matched_trials": completed_trial_samples,
         },
+        "enrollment_by_country": _summarize_enrollment_by_country(
+            completed_clinical_trials.get("enrollment_by_country") or {}
+        ),
+        "trial_sites": _summarize_trial_sites(trial_sites or {}),
+        "depmap": _summarize_depmap(depmap or {}),
         "existing_drugs": _summarize_drugs(existing_drugs),
         "patient_metadata": _summarize_patient_metadata(patient_metadata_stats or {}),
     }
@@ -345,6 +592,8 @@ def feasibility_summary(
     completed_clinical_trials: dict[str, Any],
     existing_drugs: dict[str, Any],
     patient_metadata_stats: dict[str, Any] | None = None,
+    depmap: dict[str, Any] | None = None,
+    trial_sites: dict[str, Any] | None = None,
     *,
     model: str = OPENAI_MODEL,
 ) -> dict[str, Any]:
@@ -352,8 +601,9 @@ def feasibility_summary(
     Generate a structured clinical trial feasibility summary from GeneTrail search results.
 
     Uses OpenAI to interpret patient stats, treatment/survival data, patient metadata,
-    active and completed competing trials, and existing drug evidence into ratings,
-    endpoint recommendations, and suggestions.
+    active and completed competing trials, trial site geography, enrollment by country,
+    DepMap PRISM drug sensitivity, and existing drug evidence into ratings, endpoint
+    recommendations, and suggestions.
     """
     if not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY is missing. Add it to genetrail_ai/.env")
@@ -367,6 +617,8 @@ def feasibility_summary(
         completed_clinical_trials,
         existing_drugs,
         patient_metadata_stats,
+        depmap,
+        trial_sites,
     )
 
     prompt = f"""
@@ -374,64 +626,21 @@ You are an oncology clinical trial feasibility analyst reviewing GeneTrail searc
 
 Use ONLY the JSON context below. Cite specific numbers from the data in each rationale.
 Be concise but specific. Do not invent patient counts or trial counts.
-
-Return valid JSON with this shape:
-{{
-  "overall_verdict": "1-2 sentence feasibility conclusion",
-  "dimensions": [
-    {{
-      "dimension": "Biomarker rationale",
-      "rating": "Strong|Moderate|Challenging|Weak",
-      "why": "..."
-    }},
-    {{
-      "dimension": "Protocol clarity",
-      "rating": "Strong|Moderate|Challenging|Weak",
-      "why": "..."
-    }},
-    {{
-      "dimension": "Enrollment speed",
-      "rating": "Strong|Moderate|Challenging|Weak",
-      "why": "..."
-    }},
-    {{
-      "dimension": "Patient demographic fit",
-      "rating": "Strong|Moderate|Challenging|Weak",
-      "why": "..."
-    }},
-    {{
-      "dimension": "RWD treatment data feasibility",
-      "rating": "Strong|Moderate|Challenging|Weak",
-      "why": "..."
-    }},
-    {{
-      "dimension": "Overall survival data",
-      "rating": "Strong|Moderate|Challenging|Weak",
-      "why": "..."
-    }}
-  ],
-  "recommended_endpoints": {{
-    "recommended_phase": "e.g. Phase 2 single-arm or Phase 3 randomized",
-    "primary_endpoint": "...",
-    "primary_rationale": "...",
-    "secondary_endpoints": ["...", "..."],
-    "secondary_rationale": "..."
-  }},
-  "suggestions_to_improve_feasibility": [
-    "...",
-    "..."
-  ]
-}}
+Call the {FEASIBILITY_SUMMARY_TOOL_NAME} tool with your complete assessment.
 
 Guidance:
-- Enrollment speed: consider active clinical_trials.matched_trial_count, completed_clinical_trials.matched_trial_count, and biomarker pool size.
+- Biomarker rationale: use patient_stats eligible pool, depmap.eligible_cell_lines, depmap.strong_gene_dependencies, and depmap.top_prism_sensitive_drugs when present. Note whether biomarker-matched DepMap models show dependency and whether PRISM supports preclinical activity for relevant MOAs/targets.
+- Enrollment speed: consider active clinical_trials.matched_trial_count, completed_clinical_trials.matched_trial_count, biomarker pool size, trial_sites.unique_site_count, trial_sites.unique_country_count, trial_sites.top_countries_by_unique_site_count, and enrollment_by_country.top_countries (active vs completed allocated enrollment). Dense site maps and high country enrollment suggest established recruitment infrastructure but also competition.
 - Patient demographic fit: compare eligibility fields (age, ECOG, stage, smoking, line of therapy) against patient_metadata coverage, distributions, and *_by_os_status breakdowns. Flag sparse metadata fields, cohorts that may not match inclusion criteria, underrepresented subgroups, and whether OS signal differs by age/sex/race/stage/ECOG.
 - Completed trials: use completed_clinical_trials.outcome_summary (positive, negative, inconclusive, no-results, stopped/failed counts) and sample_matched_trials to assess precedent, competitive saturation, and endpoint feasibility.
 - RWD treatment data feasibility: compare biomarker_eligible_count vs prior_treatment_matched_count.
 - Overall survival data: use patients_with_os_status/os_days and os_status_distribution; note if Unknown is high.
 - Existing drugs: distinguish sensitive vs resistant associations when relevant.
+- Trial site map: use trial_sites counts, geographic spread, and sample_unique_sites to comment on where competing trials already operate and whether site density aligns with enrollment_by_country leaders.
+- DepMap PRISM: when depmap.top_prism_sensitive_drugs is present, cite mean_log_fold_change and sensitive_model_count for the most sensitive compounds; connect to biomarker rationale or differentiation vs existing_drugs when supported.
+- Enrollment by country: cite enrollment_by_country.active_enrollment vs completed_enrollment and top_countries when rating enrollment speed or suggesting site strategy.
 - Suggestions must include at least 1-2 metadata-informed recommendations when patient_metadata is present (e.g., broaden ECOG if cohort ECOG is sparse, age caps, site diversity for race/ethnicity gaps, smoking documentation, stage-specific enrollment strategy, subgroup monitoring).
-- Suggest ctDNA screening, central lab confirmation, differentiation vs competing trials when supported by active or completed trial landscape.
+- Suggest ctDNA screening, central lab confirmation, differentiation vs competing trials, site prioritization in top enrollment countries, and preclinical validation from DepMap PRISM when supported by the context.
 
 GeneTrail search context:
 {json.dumps(context, indent=2)}
@@ -444,16 +653,23 @@ GeneTrail search context:
                 "role": "system",
                 "content": (
                     "You assess oncology clinical trial feasibility from structured search results. "
-                    "Respond with JSON only."
+                    f"Always call {FEASIBILITY_SUMMARY_TOOL_NAME} with your assessment."
                 ),
             },
             {"role": "user", "content": prompt},
         ],
+        tools=[FEASIBILITY_SUMMARY_TOOL],
+        tool_choice={
+            "type": "function",
+            "function": {"name": FEASIBILITY_SUMMARY_TOOL_NAME},
+        },
         temperature=0,
     )
+    print("########################################################")
+    print(response.choices[0].message.tool_calls[0].function.arguments)
+    print("########################################################")
 
-    raw_text = response.choices[0].message.content or ""
-    normalized = _normalize_summary_data(_parse_json_response(raw_text))
+    normalized = _normalize_summary_data(_parse_tool_call_arguments(response))
     summary = FeasibilitySummaryResult(**normalized)
 
     return {
@@ -516,6 +732,37 @@ if __name__ == "__main__":
         "matched_trials": [],
     }
     demo_drugs = {"matched_drug_count": 3, "matched_drugs": []}
+    demo_depmap = {
+        "eligible_cell_lines": 12,
+        "total_cell_lines": 180,
+        "cell_lines_with_required_biomarkers": 18,
+        "gene_effect_summary": [
+            {"gene_symbol": "KRAS", "mean_gene_effect": -0.62, "model_count": 10},
+        ],
+        "drug_sensitivity_summary": [
+            {
+                "drug_name": "Sotorasib",
+                "screen_type": "PRISM",
+                "mean_log_fold_change": -1.42,
+                "sensitive_model_count": 8,
+                "moa": "KRAS G12C inhibitor",
+            }
+        ],
+    }
+    demo_trial_sites = {
+        "matched_trial_count": 42,
+        "trial_site_count": 310,
+        "unique_site_count": 145,
+        "unique_sites": [
+            {
+                "site_name": "Memorial Sloan Kettering",
+                "city": "New York",
+                "state": "New York",
+                "country": "United States",
+                "trial_count": 6,
+            }
+        ],
+    }
     demo_patient_metadata = {
         "eligible_patient_count": 119,
         "patients_with_metadata": 110,
@@ -564,6 +811,8 @@ if __name__ == "__main__":
                 demo_completed_clinical_trials,
                 demo_drugs,
                 demo_patient_metadata,
+                depmap=demo_depmap,
+                trial_sites=demo_trial_sites,
             ),
             indent=2,
         )

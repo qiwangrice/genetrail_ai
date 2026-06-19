@@ -14,6 +14,7 @@ from clinicaltrails_search import (
     search_active_clinical_trials,
     search_completed_clinical_trials,
     search_trial_sites,
+    summarize_enrollment_by_country,
 )
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -174,12 +175,21 @@ def _run_search_analyses(result: TrialEligibility) -> dict[str, dict]:
         )
         depmap_future = executor.submit(search_depmap_for_cell_lines, result)
 
+        clinical_trials = clinical_trials_future.result()
+        completed_clinical_trials = completed_trials_future.result()
+        active_sites = clinical_trials.pop("trial_sites", [])
+        completed_sites = completed_clinical_trials.pop("trial_sites", [])
+        completed_clinical_trials["enrollment_by_country"] = summarize_enrollment_by_country(
+            active_sites=active_sites,
+            completed_sites=completed_sites,
+        )
+
         return {
             "stats": stats_future.result(),
             "treatments": treatments_future.result(),
             "patient_metadata": metadata_future.result(),
-            "clinical_trials": clinical_trials_future.result(),
-            "completed_clinical_trials": completed_trials_future.result(),
+            "clinical_trials": clinical_trials,
+            "completed_clinical_trials": completed_clinical_trials,
             "trial_sites": trial_sites_future.result(),
             "drugs": drugs_future.result(),
             "depmap": depmap_future.result(),
@@ -317,6 +327,8 @@ if __name__ == "__main__":
         completed_clinical_trials,
         drugs,
         patient_metadata,
+        depmap=depmap,
+        trial_sites=trial_sites,
     )
     summary_json = json.dumps(summary, indent=2)
     print("\nFeasibility summary:")

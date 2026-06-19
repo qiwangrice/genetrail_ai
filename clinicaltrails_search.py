@@ -382,6 +382,136 @@ def _trial_site_summary(site: dict) -> dict:
     }
 
 
+def _site_row_enrollment(site: dict) -> int:
+    total_enrolled = site.get("total_enrolled")
+    if isinstance(total_enrolled, (int, float)):
+        return int(total_enrolled)
+
+    patients = site.get("patients_enrolled")
+    control = site.get("control_enrolled")
+    patient_count = int(patients) if isinstance(patients, (int, float)) else 0
+    control_count = int(control) if isinstance(control, (int, float)) else 0
+    if patient_count or control_count:
+        return patient_count + control_count
+    return 0
+
+
+def _allocate_enrollment_by_country(trial_sites: Iterable[dict]) -> dict:
+    """
+    Allocate each trial's total enrollment across countries proportional to site count.
+
+    CT.gov publishes trial-level enrollment only; this avoids double-counting full trial
+    totals in every country where the study listed sites.
+    """
+    trials: dict[str, dict] = {}
+    for site in trial_sites:
+        country = str(site.get("country") or "").strip()
+        nct_id = site.get("nct_id")
+        if not country or not nct_id:
+            continue
+
+        trial = trials.setdefault(
+            nct_id,
+            {"countries": {}, "enrollment": _site_row_enrollment(site)},
+        )
+        trial["countries"][country] = trial["countries"].get(country, 0) + 1
+        enrollment = _site_row_enrollment(site)
+        if enrollment > trial["enrollment"]:
+            trial["enrollment"] = enrollment
+
+    country_totals: dict[str, dict] = {}
+    trials_with_enrollment = 0
+
+    for nct_id, trial in trials.items():
+        enrollment = trial["enrollment"]
+        if enrollment <= 0:
+            continue
+
+        country_sites = trial["countries"]
+        total_sites = sum(country_sites.values())
+        if total_sites <= 0:
+            continue
+
+        trials_with_enrollment += 1
+        for country, site_count in country_sites.items():
+            allocated = int(round(enrollment * site_count / total_sites))
+            row = country_totals.setdefault(
+                country,
+                {
+                    "total_enrollment": 0,
+                    "site_count": 0,
+                    "nct_ids": set(),
+                },
+            )
+            row["total_enrollment"] += allocated
+            row["site_count"] += site_count
+            row["nct_ids"].add(nct_id)
+
+    return {
+        "country_totals": country_totals,
+        "trials_with_enrollment": trials_with_enrollment,
+        "matched_trial_count": len(trials),
+    }
+
+
+def summarize_enrollment_by_country(
+    *,
+    active_sites: Iterable[dict] | None = None,
+    completed_sites: Iterable[dict] | None = None,
+) -> dict:
+    active = _allocate_enrollment_by_country(active_sites or [])
+    completed = _allocate_enrollment_by_country(completed_sites or [])
+
+    all_countries = set(active["country_totals"]) | set(completed["country_totals"])
+    countries = []
+    for country in all_countries:
+        active_row = active["country_totals"].get(country, {})
+        completed_row = completed["country_totals"].get(country, {})
+        active_enrollment = active_row.get("total_enrollment", 0)
+        completed_enrollment = completed_row.get("total_enrollment", 0)
+        countries.append(
+            {
+                "country": country,
+                "active_enrollment": active_enrollment,
+                "completed_enrollment": completed_enrollment,
+                "total_enrollment": active_enrollment + completed_enrollment,
+                "active_trial_count": len(active_row.get("nct_ids") or set()),
+                "completed_trial_count": len(completed_row.get("nct_ids") or set()),
+                "trial_count": len(active_row.get("nct_ids") or set())
+                + len(completed_row.get("nct_ids") or set()),
+                "site_count": (active_row.get("site_count") or 0)
+                + (completed_row.get("site_count") or 0),
+            }
+        )
+
+    countries.sort(
+        key=lambda item: (-item["total_enrollment"], item["country"].lower())
+    )
+
+    active_total = sum(item["active_enrollment"] for item in countries)
+    completed_total = sum(item["completed_enrollment"] for item in countries)
+
+    return {
+        "countries": countries,
+        "total_enrollment": active_total + completed_total,
+        "active_enrollment": active_total,
+        "completed_enrollment": completed_total,
+        "trials_with_enrollment": active["trials_with_enrollment"]
+        + completed["trials_with_enrollment"],
+        "active_trials_with_enrollment": active["trials_with_enrollment"],
+        "completed_trials_with_enrollment": completed["trials_with_enrollment"],
+        "matched_trial_count": active["matched_trial_count"]
+        + completed["matched_trial_count"],
+        "active_matched_trial_count": active["matched_trial_count"],
+        "completed_matched_trial_count": completed["matched_trial_count"],
+        "enrollment_note": _ENROLLMENT_SCOPE_NOTE,
+    }
+
+
+def _summarize_enrollment_by_country(trial_sites: Iterable[dict]) -> dict:
+    return summarize_enrollment_by_country(completed_sites=trial_sites)
+
+
 def _dedupe_trials_by_nct(trials: Iterable[dict]) -> List[dict]:
     seen: set[str] = set()
     deduped: List[dict] = []
@@ -753,7 +883,12 @@ def search_active_clinical_trials(
         page_size=page_size,
         timeout_seconds=timeout_seconds,
         include_outcome_classification=False,
+        include_locations=True,
     )
+    matched_trials = search["matched_trials"]
+    trial_sites = search.get("trial_sites") or []
+    for trial in matched_trials:
+        trial.pop("sites", None)
 
     return {
         "data_source": "clinicaltrials.gov_api_v2",
@@ -764,8 +899,9 @@ def search_active_clinical_trials(
         "excluded_biomarkers": excluded,
         "pages_fetched": search["pages_fetched"],
         "trials_scanned": search["trials_scanned"],
-        "matched_trial_count": len(search["matched_trials"]),
-        "matched_trials": search["matched_trials"],
+        "matched_trial_count": len(matched_trials),
+        "matched_trials": matched_trials,
+        "trial_sites": trial_sites,
     }
 
 
@@ -775,6 +911,7 @@ def search_completed_clinical_trials(
     cancer_type: str | None = None,
     required_biomarkers: Iterable[str] | None = None,
     excluded_biomarkers: Iterable[str] | None = None,
+    active_trial_sites: Iterable[dict] | None = None,
     max_pages: int = 5,
     max_results: int = 50,
     page_size: int = 100,
@@ -809,9 +946,17 @@ def search_completed_clinical_trials(
         page_size=page_size,
         timeout_seconds=timeout_seconds,
         include_outcome_classification=True,
+        include_locations=True,
     )
     matched_trials = search["matched_trials"]
+    trial_sites = search.get("trial_sites") or []
     outcome_summary = _summarize_finished_trial_outcomes(matched_trials)
+    enrollment_by_country = summarize_enrollment_by_country(
+        active_sites=active_trial_sites,
+        completed_sites=trial_sites,
+    )
+    for trial in matched_trials:
+        trial.pop("sites", None)
 
     return {
         "data_source": "clinicaltrials.gov_api_v2",
@@ -824,7 +969,9 @@ def search_completed_clinical_trials(
         "trials_scanned": search["trials_scanned"],
         "matched_trial_count": len(matched_trials),
         "outcome_summary": outcome_summary,
+        "enrollment_by_country": enrollment_by_country,
         "matched_trials": matched_trials,
+        "trial_sites": trial_sites,
     }
 
 
