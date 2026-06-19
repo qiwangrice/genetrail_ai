@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from posthog import Posthog
 from pydantic import BaseModel, Field
@@ -36,6 +36,23 @@ _posthog_client: Posthog | None = None
 
 def get_posthog() -> Posthog | None:
     return _posthog_client
+
+
+def _posthog_distinct_id(request: Request, fallback: str | None = None) -> str:
+    header_id = request.headers.get("x-posthog-distinct-id")
+    if header_id and header_id.strip():
+        return header_id.strip()
+    return fallback or f"anon-{uuid.uuid4()}"
+
+
+def _capture_posthog(
+    ph: Posthog,
+    distinct_id: str,
+    event: str,
+    properties: dict[str, Any] | None = None,
+) -> None:
+    ph.capture(distinct_id, event, properties=properties or {})
+    ph.flush()
 
 
 @asynccontextmanager
@@ -119,7 +136,7 @@ def health() -> dict[str, str]:
 
 
 @app.post("/api/feedback", response_model=FeedbackResponse)
-def submit_feedback(payload: FeedbackRequest) -> FeedbackResponse:
+def submit_feedback(payload: FeedbackRequest, request: Request) -> FeedbackResponse:
     try:
         saved = save_user_feedback(
             rating=payload.rating,
@@ -135,8 +152,12 @@ def submit_feedback(payload: FeedbackRequest) -> FeedbackResponse:
 
     ph = get_posthog()
     if ph:
-        distinct_id = payload.email or f"anon-{saved.get('id', uuid.uuid4())}"
-        ph.capture(
+        distinct_id = _posthog_distinct_id(
+            request,
+            payload.email or f"anon-{saved.get('id', uuid.uuid4())}",
+        )
+        _capture_posthog(
+            ph,
             distinct_id,
             "feedback_submitted",
             properties={
@@ -152,16 +173,17 @@ def submit_feedback(payload: FeedbackRequest) -> FeedbackResponse:
 
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
-def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
+def analyze_protocol(payload: AnalyzeRequest, request: Request) -> AnalyzeResponse:
     protocol = payload.protocol.strip()
     if not protocol:
         raise HTTPException(status_code=400, detail="Protocol text is required.")
 
     ph = get_posthog()
-    distinct_id = f"anon-{uuid.uuid4()}"
+    distinct_id = _posthog_distinct_id(request)
 
     if ph:
-        ph.capture(
+        _capture_posthog(
+            ph,
             distinct_id,
             "protocol_analyzed",
             properties={
@@ -206,7 +228,8 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
         )
     except RuntimeError as exc:
         if ph:
-            ph.capture(
+            _capture_posthog(
+                ph,
                 distinct_id,
                 "analysis_failed",
                 properties={"error_type": "runtime", "error_message": str(exc)},
@@ -215,7 +238,9 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
     except Exception as exc:
         if ph:
             ph.capture_exception(exc)
-            ph.capture(
+            ph.flush()
+            _capture_posthog(
+                ph,
                 distinct_id,
                 "analysis_failed",
                 properties={"error_type": "unexpected", "error_message": str(exc)},
@@ -224,7 +249,8 @@ def analyze_protocol(payload: AnalyzeRequest) -> AnalyzeResponse:
 
     if ph:
         overall_verdict = summary.get("overall_verdict", "")
-        ph.capture(
+        _capture_posthog(
+            ph,
             distinct_id,
             "analysis_completed",
             properties={

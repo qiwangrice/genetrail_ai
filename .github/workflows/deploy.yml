@@ -5,6 +5,8 @@ name: Deploy
 #   VERCEL_ORG_ID         - Vercel project Settings → General
 #   VERCEL_PROJECT_ID     - Vercel project Settings → General
 #   VITE_API_URL          - Railway backend URL (no trailing slash)
+#   VITE_POSTHOG_KEY      - Same PostHog project API key (phc_...) for frontend analytics
+#   VITE_POSTHOG_HOST     - https://us.i.posthog.com
 #   RAILWAY_TOKEN         - Railway account Settings → Tokens
 #   RAILWAY_SERVICE_ID    - Railway service Settings → Service ID
 
@@ -61,6 +63,8 @@ jobs:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY }}
+          VITE_POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST }}
 
       - name: Deploy to Vercel
         run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}

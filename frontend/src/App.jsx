@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { TrialSitesMapSection } from "./TrialSitesMap.jsx";
+import { posthogRequestHeaders, setupClickTracking, trackEvent, trackPageView } from "./posthog.js";
 import "./App.css";
 
 const GENE_PROTEIN_INFO = {
@@ -2068,7 +2069,10 @@ function FeedbackPanel({ result }) {
     try {
       const response = await fetch(apiUrl("/api/feedback"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...posthogRequestHeaders(),
+        },
         body: JSON.stringify({
           rating,
           comment: comment.trim(),
@@ -2783,6 +2787,11 @@ export default function App() {
   const [metadataAttribute, setMetadataAttribute] = useState("sex");
 
   useEffect(() => {
+    trackPageView();
+    return setupClickTracking();
+  }, []);
+
+  useEffect(() => {
     if (!loading) {
       return undefined;
     }
@@ -2821,10 +2830,14 @@ export default function App() {
     }
 
     setLoading(true);
+    trackEvent("analyze_clicked", { protocol_length: text.length });
     try {
       const response = await fetch(apiUrl("/api/analyze"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...posthogRequestHeaders(),
+        },
         body: JSON.stringify({ protocol: text }),
       });
 
@@ -2834,8 +2847,13 @@ export default function App() {
       }
       setLoadingStep(ANALYSIS_STEPS.length);
       setResult(data);
+      trackEvent("analyze_succeeded", {
+        eligible_patients: data.stats?.eligible_patients,
+        active_trial_count: data.clinical_trials?.matched_trial_count,
+      });
       await new Promise((resolve) => window.setTimeout(resolve, 350));
     } catch (err) {
+      trackEvent("analyze_failed", { error_message: err.message || "unknown" });
       setError(err.message || "Something went wrong.");
     } finally {
       setLoading(false);
@@ -2869,7 +2887,12 @@ export default function App() {
           />
 
           <div className="actions">
-            <button type="submit" className="search-button" disabled={loading}>
+            <button
+              type="submit"
+              className="search-button"
+              data-track="analyze-protocol"
+              disabled={loading}
+            >
               {loading ? "Analyzing..." : "Analyze protocol"}
             </button>
           </div>
