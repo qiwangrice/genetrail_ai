@@ -3,8 +3,8 @@ import posthog from "posthog-js";
 let initialized = false;
 
 export function initPostHog() {
-  const key = import.meta.env.VITE_POSTHOG_KEY;
-  const host = import.meta.env.VITE_POSTHOG_HOST || "https://us.i.posthog.com";
+  const key = import.meta.env.POSTHOG_PROJECT_TOKEN;
+  const host = import.meta.env.POSTHOG_HOST || "https://us.i.posthog.com";
 
   if (!key || initialized) {
     return Boolean(key);
@@ -23,7 +23,7 @@ export function initPostHog() {
 }
 
 export function isPostHogEnabled() {
-  return initialized && Boolean(import.meta.env.VITE_POSTHOG_KEY);
+  return initialized && Boolean(import.meta.env.POSTHOG_PROJECT_TOKEN);
 }
 
 export function trackPageView() {
