@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -31,11 +32,25 @@ from vicc_search import search_vicc_drugs
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 _posthog_client: Posthog | None = None
 
 
 def get_posthog() -> Posthog | None:
     return _posthog_client
+
+
+def posthog_status() -> dict[str, Any]:
+    token = os.getenv("POSTHOG_PROJECT_TOKEN", "").strip()
+    host = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com").strip()
+    return {
+        "enabled": _posthog_client is not None,
+        "token_configured": bool(token),
+        "client_initialized": _posthog_client is not None,
+        "token_format_ok": token.startswith("phc_") if token else False,
+        "host": host or "https://us.i.posthog.com",
+    }
 
 
 def _posthog_distinct_id(request: Request, fallback: str | None = None) -> str:
@@ -58,13 +73,18 @@ def _capture_posthog(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _posthog_client
-    token = os.getenv("POSTHOG_PROJECT_TOKEN", "")
+    token = os.getenv("POSTHOG_PROJECT_TOKEN", "").strip()
     host = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
     if token:
         _posthog_client = Posthog(
             project_api_key=token,
             host=host,
             enable_exception_autocapture=True,
+        )
+        logger.info("PostHog backend analytics enabled (host=%s)", host)
+    else:
+        logger.warning(
+            "PostHog backend analytics disabled: POSTHOG_PROJECT_TOKEN is not set"
         )
     yield
     if _posthog_client:
@@ -131,8 +151,12 @@ class AnalyzeResponse(BaseModel):
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, Any]:
+    posthog = posthog_status()
+    return {
+        "status": "ok",
+        "posthog": posthog,
+    }
 
 
 @app.post("/api/feedback", response_model=FeedbackResponse)

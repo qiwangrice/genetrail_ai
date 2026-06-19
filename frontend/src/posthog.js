@@ -13,7 +13,7 @@ export function initPostHog() {
   posthog.init(key, {
     api_host: host,
     person_profiles: "identified_only",
-    capture_pageview: false,
+    capture_pageview: true,
     capture_pageleave: true,
     autocapture: false,
   });
