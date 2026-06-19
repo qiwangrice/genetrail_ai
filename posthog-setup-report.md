@@ -8,6 +8,11 @@ The wizard has completed a deep integration of PostHog analytics into GeneTrail 
 | `analysis_completed` | Protocol analysis pipeline completes successfully with feasibility results | `api.py` |
 | `analysis_failed` | Protocol analysis pipeline fails due to a runtime or unexpected error | `api.py` |
 | `feedback_submitted` | User submits a star rating and optional comment via the feedback form | `api.py` |
+| `$pageview` | User loads the GeneTrail app | `frontend/src/posthog.js` |
+| `ui_click` | User clicks buttons, links, tabs, or panel toggles | `frontend/src/posthog.js` |
+| `analyze_clicked` | User submits the analyze form | `frontend/src/App.jsx` |
+| `analyze_succeeded` | Frontend receives a successful analyze response | `frontend/src/App.jsx` |
+| `analyze_failed` | Frontend analyze request fails | `frontend/src/App.jsx` |
 
 ## Next steps
 
@@ -24,7 +29,8 @@ We've built some insights and a dashboard for you to keep an eye on user behavio
 
 - [ ] Run a full production build (the wizard only verified the files it touched) and fix any lint or type errors introduced by the generated code.
 - [ ] Run the test suite — call sites that were rewritten or instrumented may need updated mocks or fixtures.
-- [ ] Add `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` to `.env.example` and any bootstrap scripts so collaborators know what to set.
+- [ ] Add `POSTHOG_PROJECT_TOKEN` and `POSTHOG_HOST` to Railway and `.env.example`.
+- [ ] Add `VITE_POSTHOG_KEY` and `VITE_POSTHOG_HOST` to Vercel and GitHub deploy secrets.
 
 ### Agent skill
 
